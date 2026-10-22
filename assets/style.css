@@ -1,0 +1,168 @@
+/* Modern Dark Theme for Pequeño Asistente */
+
+window.asistente-window {
+    background-color: #11111b;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.asistente-header {
+    background-color: #181825;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    padding: 6px 12px;
+}
+
+.model-pill {
+    background-color: rgba(255, 255, 255, 0.06);
+    border-radius: 12px;
+    padding: 3px 8px;
+    font-size: 11px;
+    color: #cdd6f4;
+}
+
+.status-pill {
+    background-color: rgba(166, 227, 161, 0.15);
+    color: #a6e3a1;
+    border-radius: 12px;
+    padding: 3px 8px;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+/* Chat View */
+.user-bubble {
+    background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+    color: #ffffff;
+    border-radius: 16px 16px 4px 16px;
+    padding: 10px 14px;
+    margin-left: 48px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+.assistant-bubble {
+    background-color: #181825;
+    color: #cdd6f4;
+    border-radius: 16px 16px 16px 4px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    padding: 12px 14px;
+    margin-right: 48px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* Tool execution card */
+.tool-card {
+    background-color: #1e1e2e;
+    border-radius: 10px;
+    border: 1px solid rgba(137, 180, 250, 0.2);
+    padding: 8px 12px;
+    margin: 4px 16px;
+}
+
+.tool-title {
+    font-size: 12px;
+    font-weight: bold;
+    color: #89b4fa;
+}
+
+.tool-details {
+    background-color: #11111b;
+    border-radius: 6px;
+    padding: 8px;
+    margin-top: 4px;
+    font-size: 11px;
+    color: #a6adc8;
+}
+
+/* Input area */
+.input-box {
+    background-color: #181825;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    padding: 10px 12px;
+}
+
+.chat-input {
+    background-color: #11111b;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 8px 12px;
+    color: #cdd6f4;
+}
+
+.chat-input:focus-within {
+    border-color: #89b4fa;
+}
+
+.send-button {
+    border-radius: 10px;
+    background-color: #89b4fa;
+    color: #11111b;
+    font-weight: bold;
+}
+
+.send-button:hover {
+    background-color: #b4befe;
+}
+
+.stop-button {
+    border-radius: 10px;
+    background-color: #f38ba8;
+    color: #11111b;
+    font-weight: bold;
+}
+
+.system-notice {
+    color: #6c7086;
+    font-size: 11px;
+    font-style: italic;
+    margin: 6px 0;
+}
+
+.error-notice {
+    color: #f38ba8;
+    background-color: rgba(243, 139, 168, 0.1);
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 12px;
+    margin: 6px 0;
+}
+
+/* Code Card & Blocks */
+.code-card {
+    background-color: #11111b;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    margin: 6px 0;
+}
+
+.code-header {
+    background-color: #181825;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    padding: 3px 8px;
+}
+
+.code-lang-label {
+    font-size: 10px;
+    font-weight: bold;
+    color: #89b4fa;
+    text-transform: uppercase;
+}
+
+.code-copy-btn {
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: #cdd6f4;
+}
+
+.code-copy-btn:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+    color: #89b4fa;
+}
+
+.code-body {
+    padding: 8px 10px;
+    font-family: 'JetBrains Mono', 'Fira Code', 'DejaVu Sans Mono', monospace;
+    font-size: 11px;
+    color: #a6e3a1;
+    background-color: #11111b;
+}

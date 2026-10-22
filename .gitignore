@@ -1,0 +1,24 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Temporary and local runtime files
+.kognito_tmp/
+*.log
+.env
+.env.*
+!.env.example
+
+# IDEs and OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
