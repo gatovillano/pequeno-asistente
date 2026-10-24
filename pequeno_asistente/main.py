@@ -15,15 +15,21 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from pequeno_asistente.config import ConfigManager
 from pequeno_asistente.agent.memory import MemoryManager
+from pequeno_asistente.agent.thread_manager import ThreadManager
 from pequeno_asistente.mcp_client.manager import MCPManager
 from pequeno_asistente.agent.core import AgentCore
-from pequeno_asistente.ui.tray import send_toggle_command, ToggleSocketServer
+from pequeno_asistente.ui.tray import send_toggle_command, send_new_thread_command, ToggleSocketServer
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("pequeno_asistente")
 
 def main():
+    # Handle --new-thread / -n command line arguments
+    if "--new-thread" in sys.argv or "-n" in sys.argv or "--new" in sys.argv:
+        if send_new_thread_command():
+            sys.exit(0)
+
     # Handle --toggle or --show command line arguments
     if "--toggle" in sys.argv or "-t" in sys.argv:
         if send_toggle_command():
@@ -49,8 +55,9 @@ def main():
     # 2. Initialize Managers
     config_manager = ConfigManager()
     memory_manager = MemoryManager()
+    thread_manager = ThreadManager()
     mcp_manager = MCPManager(config_manager=config_manager)
-    agent = AgentCore(config_manager, mcp_manager, memory_manager)
+    agent = AgentCore(config_manager, mcp_manager, memory_manager, thread_manager=thread_manager)
 
     # 3. Synchronize MCP servers in background
     async def init_mcps():
@@ -73,13 +80,14 @@ def main():
                 agent=agent,
                 mcp_manager=mcp_manager,
                 memory_manager=memory_manager,
+                thread_manager=thread_manager,
                 async_loop=async_loop
             )
         main_window.present()
 
     app.connect("activate", on_activate)
 
-    # 5. Socket IPC for instant toggling from Waybar or Hyprland shortcut
+    # 5. Socket IPC for instant toggling from Waybar, Hyprland or GNOME Shell
     def handle_toggle():
         if main_window:
             main_window.toggle_window()
@@ -89,7 +97,34 @@ def main():
             main_window.set_visible(True)
             main_window.present()
 
-    socket_server = ToggleSocketServer(handle_toggle, handle_show)
+    def handle_hide():
+        if main_window:
+            main_window.set_visible(False)
+
+    def handle_settings():
+        if main_window:
+            main_window.set_visible(True)
+            main_window.present()
+            main_window._on_open_settings(None)
+
+    def handle_clear():
+        if main_window:
+            main_window._on_clear_chat(None)
+
+    def handle_new_thread():
+        if main_window:
+            main_window.set_visible(True)
+            main_window.present()
+            main_window._on_new_thread()
+
+    socket_server = ToggleSocketServer(
+        on_toggle=handle_toggle,
+        on_show=handle_show,
+        on_hide=handle_hide,
+        on_settings=handle_settings,
+        on_clear=handle_clear,
+        on_new_thread=handle_new_thread
+    )
     socket_server.start()
 
     # 6. Cleanup on exit

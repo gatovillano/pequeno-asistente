@@ -1,155 +1,410 @@
-/* Modern Dark Theme for Pequeño Asistente */
+/* Modern & Compact Dark Theme for Pequeño Asistente */
 
 window.asistente-window {
-    background-color: #11111b;
+    background-color: #12121c;
     border-radius: 16px;
     border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+/* Header Bar */
 .asistente-header {
-    background-color: #181825;
+    background-color: #171724;
     border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-    padding: 6px 12px;
+    padding: 2px 6px;
+    min-height: 38px;
+}
+
+.header-title {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: #cdd6f4;
+}
+
+.header-icon-btn {
+    border-radius: 7px;
+    padding: 3px;
+    min-width: 26px;
+    min-height: 26px;
+    color: #a6adc8;
+}
+
+.header-icon-btn:hover {
+    background-color: rgba(255, 255, 255, 0.06);
+    color: #cdd6f4;
 }
 
 .model-pill {
-    background-color: rgba(255, 255, 255, 0.06);
-    border-radius: 12px;
-    padding: 3px 8px;
-    font-size: 11px;
-    color: #cdd6f4;
+    background-color: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 8px;
+    padding: 0px 6px;
+    font-size: 9.5px;
+    color: #9399b2;
 }
 
 .status-pill {
-    background-color: rgba(166, 227, 161, 0.15);
-    color: #a6e3a1;
-    border-radius: 12px;
-    padding: 3px 8px;
-    font-size: 11px;
+    background-color: rgba(34, 197, 94, 0.12);
+    color: #4ade80;
+    border: 1px solid rgba(74, 222, 128, 0.22);
+    border-radius: 9px;
+    padding: 1px 7px;
+    font-size: 10px;
+    font-weight: 600;
+}
+
+/* Empty State / Welcome Card */
+.welcome-card {
+    padding: 12px 10px;
+}
+
+.welcome-avatar-box {
+    background: radial-gradient(circle, rgba(99, 102, 241, 0.22) 0%, rgba(59, 130, 246, 0.05) 70%, transparent 100%);
+    border: 1px solid rgba(137, 180, 250, 0.2);
+    border-radius: 20px;
+    padding: 6px;
+    margin-bottom: 2px;
+}
+
+.welcome-avatar {
+    font-size: 26px;
+}
+
+.welcome-title {
+    font-size: 14.5px;
     font-weight: bold;
+    color: #cdd6f4;
+}
+
+.welcome-subtitle {
+    font-size: 11px;
+    color: #6c7086;
+    margin-bottom: 6px;
+}
+
+.welcome-suggestions {
+    margin-top: 4px;
+}
+
+.suggestion-chip {
+    background-color: #181827;
+    border: 1px solid rgba(255, 255, 255, 0.065);
+    border-radius: 9px;
+    padding: 5px 9px;
+    color: #cdd6f4;
+    font-size: 11px;
+    margin: 2px 0;
+}
+
+.suggestion-chip:hover {
+    background-color: #212136;
+    border-color: rgba(137, 180, 250, 0.3);
+    color: #89b4fa;
+}
+
+.suggestion-arrow {
+    color: #6c7086;
+    font-size: 12px;
 }
 
 /* Chat View */
-.user-bubble {
-    background: linear-gradient(135deg, #3b82f6, #1d4ed8);
-    color: #ffffff;
-    border-radius: 16px 16px 4px 16px;
-    padding: 10px 14px;
-    margin-left: 48px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+.message-bubble {
+    margin: 6px 0;
 }
 
-.assistant-bubble {
-    background-color: #181825;
+/* User Bubble: sleek capsule aligned to the right */
+.user-bubble {
+    background-color: #2b2d42;
+    color: #f1f5f9;
+    border-radius: 18px 18px 4px 18px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 9px 14px;
+    margin-left: 64px;
+    margin-bottom: 8px;
+    font-size: 13px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.22);
+}
+
+.user-bubble .message-text {
+    color: #f1f5f9;
+}
+
+/* Assistant Message: NO bubble, flat centered reading text layout (ChatGPT / Claude / Gemini style) */
+.assistant-bubble,
+.assistant-message {
+    background: transparent;
+    background-color: transparent;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    padding: 6px 2px 14px 2px;
+    margin: 4px 0 12px 0;
+    font-size: 13.5px;
     color: #cdd6f4;
-    border-radius: 16px 16px 16px 4px;
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    padding: 12px 14px;
-    margin-right: 48px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.message-text {
+    font-size: 13px;
+    line-height: 1.55;
+    color: #cdd6f4;
+}
+
+.assistant-header {
+    margin-bottom: 6px;
+    opacity: 0.9;
+}
+
+.assistant-bot-icon {
+    font-size: 12px;
+    color: #89b4fa;
+}
+
+.assistant-title-label {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: #89b4fa;
+    letter-spacing: 0.25px;
+}
+
+/* Action toolbar at bottom of assistant response */
+.assistant-actions-bar {
+    margin-top: 8px;
+    padding-top: 2px;
+    opacity: 0.65;
+    transition: opacity 150ms ease-in-out;
+}
+
+.assistant-actions-bar:hover {
+    opacity: 1.0;
+}
+
+.assistant-action-btn {
+    border-radius: 6px;
+    padding: 3px 6px;
+    min-width: 26px;
+    min-height: 26px;
+    color: #a6adc8;
+    background-color: transparent;
+    border: none;
+}
+
+.assistant-action-btn:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+    color: #89b4fa;
+}
+
+.bubble-copy-btn {
+    opacity: 0.5;
+    padding: 2px 5px;
+    min-width: 22px;
+    min-height: 22px;
+    border-radius: 5px;
+    color: #a6adc8;
+}
+
+.bubble-copy-btn:hover {
+    opacity: 1.0;
+    color: #89b4fa;
+    background-color: rgba(255, 255, 255, 0.08);
 }
 
 /* Tool execution card */
 .tool-card {
-    background-color: #1e1e2e;
-    border-radius: 10px;
-    border: 1px solid rgba(137, 180, 250, 0.2);
-    padding: 8px 12px;
-    margin: 4px 16px;
+    background-color: #151522;
+    border-radius: 8px;
+    border: 1px solid rgba(137, 180, 250, 0.18);
+    padding: 4px 8px;
+    margin: 2px 6px;
 }
 
 .tool-title {
-    font-size: 12px;
-    font-weight: bold;
+    font-size: 11px;
+    font-weight: 600;
     color: #89b4fa;
 }
 
+.tool-badge-running {
+    font-size: 9px;
+    color: #89b4fa;
+    background-color: rgba(137, 180, 250, 0.12);
+    padding: 1px 5px;
+    border-radius: 5px;
+}
+
+.tool-badge-success {
+    font-size: 9px;
+    color: #a6e3a1;
+    background-color: rgba(166, 227, 161, 0.12);
+    padding: 1px 5px;
+    border-radius: 5px;
+}
+
+.tool-badge-error {
+    font-size: 9px;
+    color: #f38ba8;
+    background-color: rgba(243, 139, 168, 0.12);
+    padding: 1px 5px;
+    border-radius: 5px;
+}
+
+.tool-icon-success {
+    color: #a6e3a1;
+    font-weight: bold;
+    font-size: 10.5px;
+}
+
+.tool-icon-error {
+    color: #f38ba8;
+    font-weight: bold;
+    font-size: 10.5px;
+}
+
+.tool-toggle-btn {
+    padding: 1px 3px;
+    min-width: 18px;
+    min-height: 18px;
+    border-radius: 4px;
+    color: #6c7086;
+}
+
+.tool-toggle-btn:hover {
+    color: #cdd6f4;
+    background-color: rgba(255, 255, 255, 0.06);
+}
+
 .tool-details {
-    background-color: #11111b;
+    background-color: #0e0e16;
     border-radius: 6px;
-    padding: 8px;
-    margin-top: 4px;
-    font-size: 11px;
+    padding: 5px 7px;
+    margin-top: 3px;
+    font-size: 10px;
     color: #a6adc8;
 }
 
 /* Input area */
-.input-box {
-    background-color: #181825;
+.input-container {
+    background-color: #161623;
     border-top: 1px solid rgba(255, 255, 255, 0.06);
-    padding: 10px 12px;
+    padding: 6px 10px 4px 10px;
 }
 
-.chat-input {
-    background-color: #11111b;
+.input-card {
+    background-color: #101018;
     border-radius: 12px;
     border: 1px solid rgba(255, 255, 255, 0.08);
-    padding: 8px 12px;
+    padding: 3px 4px 3px 8px;
+}
+
+.input-card:focus-within {
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.25);
+}
+
+.chat-input-scrolled {
+    background: transparent;
+}
+
+.chat-text-view {
+    background: transparent;
+    color: #cdd6f4;
+    font-size: 12.5px;
+}
+
+.mic-button {
+    border-radius: 8px;
+    background-color: rgba(255, 255, 255, 0.06);
+    color: #a6adc8;
+    min-width: 28px;
+    min-height: 28px;
+    padding: 3px;
+    transition: all 200ms ease;
+}
+
+.mic-button:hover {
+    background-color: rgba(255, 255, 255, 0.14);
     color: #cdd6f4;
 }
 
-.chat-input:focus-within {
-    border-color: #89b4fa;
+.mic-button-recording {
+    background-color: #f38ba8;
+    color: #11111b;
+}
+
+.mic-button-transcribing {
+    background-color: rgba(137, 180, 250, 0.25);
+    color: #89b4fa;
 }
 
 .send-button {
-    border-radius: 10px;
-    background-color: #89b4fa;
-    color: #11111b;
+    border-radius: 8px;
+    background-color: #3b82f6;
+    color: #ffffff;
     font-weight: bold;
+    min-width: 28px;
+    min-height: 28px;
+    padding: 3px;
 }
 
 .send-button:hover {
-    background-color: #b4befe;
+    background-color: #2563eb;
 }
 
 .stop-button {
-    border-radius: 10px;
+    border-radius: 8px;
     background-color: #f38ba8;
     color: #11111b;
     font-weight: bold;
+    min-width: 28px;
+    min-height: 28px;
+    padding: 3px;
+}
+
+.input-hint {
+    color: #6c7086;
+    font-size: 9.5px;
+    margin-top: 2px;
+    margin-bottom: 2px;
 }
 
 .system-notice {
     color: #6c7086;
-    font-size: 11px;
+    font-size: 10.5px;
     font-style: italic;
-    margin: 6px 0;
+    margin: 4px 0;
 }
 
 .error-notice {
     color: #f38ba8;
     background-color: rgba(243, 139, 168, 0.1);
-    border-radius: 8px;
-    padding: 6px 10px;
-    font-size: 12px;
-    margin: 6px 0;
+    border-radius: 7px;
+    padding: 5px 8px;
+    font-size: 11px;
+    margin: 4px 0;
 }
 
 /* Code Card & Blocks */
 .code-card {
-    background-color: #11111b;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background-color: #101018;
+    border: 1px solid rgba(255, 255, 255, 0.075);
     border-radius: 8px;
-    margin: 6px 0;
+    margin: 4px 0;
 }
 
 .code-header {
-    background-color: #181825;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-    padding: 3px 8px;
+    background-color: #161623;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    padding: 2px 7px;
 }
 
 .code-lang-label {
-    font-size: 10px;
+    font-size: 9px;
     font-weight: bold;
     color: #89b4fa;
-    text-transform: uppercase;
+    letter-spacing: 0.5px;
 }
 
 .code-copy-btn {
-    font-size: 10px;
-    padding: 2px 6px;
+    font-size: 9px;
+    padding: 1px 5px;
     border-radius: 4px;
     color: #cdd6f4;
 }
@@ -160,9 +415,305 @@ window.asistente-window {
 }
 
 .code-body {
-    padding: 8px 10px;
+    padding: 6px 8px;
     font-family: 'JetBrains Mono', 'Fira Code', 'DejaVu Sans Mono', monospace;
-    font-size: 11px;
+    font-size: 10.5px;
     color: #a6e3a1;
-    background-color: #11111b;
+    background-color: #101018;
+}
+
+/* Markdown Table Card & Cells */
+.table-card {
+    background-color: #101018;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    margin: 6px 0;
+}
+
+.table-header-bar {
+    background-color: #161623;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    padding: 3px 8px;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+}
+
+.table-badge-label {
+    font-size: 9.5px;
+    font-weight: bold;
+    color: #89b4fa;
+    letter-spacing: 0.5px;
+}
+
+.table-scroll {
+    background-color: transparent;
+    border-bottom-left-radius: 8px;
+    border-bottom-right-radius: 8px;
+}
+
+.markdown-table-grid {
+    background-color: transparent;
+}
+
+.table-cell {
+    padding: 6px 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    font-size: 11px;
+    color: #cdd6f4;
+}
+
+.table-cell-divider {
+    border-right: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.table-cell-last-row {
+    border-bottom: none;
+}
+
+.table-header-cell {
+    background-color: rgba(255, 255, 255, 0.045);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    font-weight: bold;
+    color: #b4befe;
+}
+
+.table-row-odd {
+    background-color: rgba(255, 255, 255, 0.012);
+}
+
+.table-row-even {
+    background-color: rgba(255, 255, 255, 0.028);
+}
+
+/* Conversation Threads Sidebar */
+.thread-sidebar {
+    background-color: #151522;
+    border-right: 1px solid rgba(255, 255, 255, 0.07);
+    padding: 8px;
+}
+
+.thread-sidebar-header {
+    padding: 2px 4px;
+    margin-bottom: 4px;
+}
+
+.thread-sidebar-title {
+    font-size: 12px;
+    font-weight: bold;
+    color: #cdd6f4;
+}
+
+.sidebar-close-btn {
+    padding: 2px 4px;
+    min-width: 22px;
+    min-height: 22px;
+    border-radius: 5px;
+}
+
+.new-thread-btn {
+    background-color: rgba(59, 130, 246, 0.12);
+    border: 1px solid rgba(59, 130, 246, 0.25);
+    border-radius: 8px;
+    padding: 5px 8px;
+    margin-bottom: 6px;
+    color: #89b4fa;
+}
+
+.new-thread-btn:hover {
+    background-color: rgba(59, 130, 246, 0.22);
+    color: #b4befe;
+}
+
+.new-thread-btn-text {
+    font-weight: bold;
+    font-size: 11px;
+}
+
+.thread-list {
+    background: transparent;
+}
+
+.thread-row {
+    background-color: transparent;
+    border-radius: 7px;
+    margin: 1px 0;
+    padding: 2px 4px;
+}
+
+.thread-row:hover {
+    background-color: rgba(255, 255, 255, 0.04);
+}
+
+.thread-row-active {
+    background-color: rgba(59, 130, 246, 0.12);
+    border-left: 3px solid #3b82f6;
+}
+
+.thread-select-btn {
+    padding: 3px 4px;
+    background: transparent;
+}
+
+.thread-item-title {
+    font-weight: 600;
+    font-size: 11px;
+    color: #cdd6f4;
+}
+
+.thread-item-date {
+    font-size: 9.5px;
+    color: #6c7086;
+}
+
+.thread-del-btn {
+    opacity: 0.5;
+    padding: 2px;
+    border-radius: 5px;
+    min-width: 20px;
+    min-height: 20px;
+}
+
+.thread-del-btn:hover {
+    opacity: 1.0;
+    color: #f38ba8;
+    background-color: rgba(243, 139, 168, 0.15);
+}
+
+/* Minimal Slim Scrollbars */
+scrollbar {
+    background: transparent;
+}
+
+scrollbar trough {
+    background: transparent;
+}
+
+scrollbar slider {
+    background-color: rgba(255, 255, 255, 0.12);
+    border-radius: 6px;
+    min-width: 4px;
+    min-height: 4px;
+}
+
+scrollbar slider:hover {
+    background-color: rgba(255, 255, 255, 0.22);
+}
+
+/* Voice-to-Voice Call Mode */
+.call-screen {
+    background: radial-gradient(circle at 50% 35%, #18192c 0%, #0d0e17 85%);
+    padding: 10px 14px;
+}
+
+.call-top-bar {
+    background-color: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 20px;
+    padding: 3px 12px;
+}
+
+.call-status-badge {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: #a6adc8;
+}
+
+.call-badge-listening {
+    color: #4ade80;
+}
+
+.call-badge-thinking {
+    color: #facc15;
+}
+
+.call-badge-speaking {
+    color: #c084fc;
+}
+
+.call-timer-label {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 11.5px;
+    color: #94a3b8;
+    margin-left: 6px;
+}
+
+.call-subtitles-container {
+    min-height: 56px;
+    margin: 8px 12px;
+}
+
+.call-user-subtitle {
+    font-size: 12.5px;
+    color: #93c5fd;
+    font-style: italic;
+    background-color: rgba(59, 130, 246, 0.1);
+    border-radius: 12px;
+    padding: 6px 12px;
+    margin-bottom: 4px;
+}
+
+.call-asst-subtitle {
+    font-size: 13px;
+    font-weight: 500;
+    color: #f1f5f9;
+    line-height: 1.45;
+}
+
+.call-controls-bar {
+    margin-top: 10px;
+}
+
+.call-control-btn {
+    border-radius: 50%;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 8px;
+    background-color: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: #e2e8f0;
+    transition: all 180ms ease;
+}
+
+.call-control-btn:hover {
+    background-color: rgba(255, 255, 255, 0.16);
+    color: #ffffff;
+}
+
+.call-btn-active-mute {
+    background-color: rgba(239, 68, 68, 0.25);
+    border-color: rgba(239, 68, 68, 0.5);
+    color: #f87171;
+}
+
+.call-end-btn {
+    border-radius: 24px;
+    background: linear-gradient(135deg, #ef4444, #dc2626);
+    color: #ffffff;
+    font-weight: bold;
+    min-width: 112px;
+    min-height: 44px;
+    padding: 6px 18px;
+    border: none;
+    box-shadow: 0 4px 14px rgba(220, 38, 38, 0.35);
+    transition: all 180ms ease;
+}
+
+.call-end-btn:hover {
+    background: linear-gradient(135deg, #f87171, #ef4444);
+    box-shadow: 0 6px 18px rgba(220, 38, 38, 0.55);
+}
+
+.header-call-btn {
+    border-radius: 7px;
+    padding: 3px 6px;
+    min-width: 28px;
+    min-height: 28px;
+    color: #38bdf8;
+    background-color: rgba(56, 189, 248, 0.1);
+    border: 1px solid rgba(56, 189, 248, 0.22);
+}
+
+.header-call-btn:hover {
+    background-color: rgba(56, 189, 248, 0.22);
+    color: #7dd3fc;
 }

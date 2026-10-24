@@ -14,6 +14,7 @@ import litellm
 from pequeno_asistente.config import ConfigManager
 from pequeno_asistente.mcp_client.manager import MCPManager
 from pequeno_asistente.agent.memory import MemoryManager
+from pequeno_asistente.agent.thread_manager import ThreadManager
 from pequeno_asistente.agent.antigravity_client import AntigravityClient
 
 # Configure litellm to avoid debug noise
@@ -234,17 +235,47 @@ class AgentCore:
         self,
         config_manager: ConfigManager,
         mcp_manager: MCPManager,
-        memory_manager: MemoryManager
+        memory_manager: MemoryManager,
+        thread_manager: Optional[ThreadManager] = None
     ):
         self.config_manager = config_manager
         self.mcp_manager = mcp_manager
         self.memory_manager = memory_manager
+        self.thread_manager = thread_manager
+        self.active_thread_id: Optional[str] = None
         self.history: List[Dict[str, Any]] = []
         self._is_running = False
         self._abort_requested = False
 
+    @property
+    def is_running(self) -> bool:
+        return self._is_running
+
+    def load_thread(self, thread_id: str) -> List[Dict[str, Any]]:
+        """Loads a conversation thread by ID into memory."""
+        if not self.thread_manager:
+            return []
+        thread_data = self.thread_manager.get_thread(thread_id)
+        if thread_data:
+            self.active_thread_id = thread_id
+            self.thread_manager.active_thread_id = thread_id
+            self.history = list(thread_data.get("messages", []))
+            return self.history
+        return []
+
+    def new_thread(self, title: str = "Nueva conversación") -> Dict[str, Any]:
+        """Starts a fresh new conversation thread."""
+        self.clear_history()
+        if self.thread_manager:
+            thread_data = self.thread_manager.create_thread(title=title)
+            self.active_thread_id = thread_data["id"]
+            return thread_data
+        return {"id": "default", "title": title, "messages": []}
+
     def clear_history(self):
         self.history.clear()
+        if self.thread_manager and self.active_thread_id:
+            self.thread_manager.save_thread(self.active_thread_id, [])
 
     def abort(self):
         self._abort_requested = True
@@ -270,11 +301,19 @@ class AgentCore:
         # Apply environment keys for LiteLLM
         self.config_manager.apply_env_keys()
 
+        # Ensure active thread exists
+        if self.thread_manager and not self.active_thread_id:
+            active_th = self.thread_manager.get_or_create_active_thread()
+            self.active_thread_id = active_th["id"]
+
         # Add user message to history
         self.history.append({
             "role": "user",
             "content": user_message
         })
+
+        if self.thread_manager and self.active_thread_id:
+            self.thread_manager.save_thread(self.active_thread_id, self.history)
 
         model = self.config_manager.get_active_model()
         max_turns = 25
@@ -413,6 +452,9 @@ class AgentCore:
                             "content": tool_result_str
                         })
 
+                    if self.thread_manager and self.active_thread_id:
+                        self.thread_manager.save_thread(self.active_thread_id, self.history)
+
                     executed_tool_turns += 1
                     # Continue loop so LLM can process results and execute next tools or synthesize answer
                     continue
@@ -424,6 +466,8 @@ class AgentCore:
                         "role": "assistant",
                         "content": final_text
                     })
+                    if self.thread_manager and self.active_thread_id:
+                        self.thread_manager.save_thread(self.active_thread_id, self.history)
                     callbacks.on_complete(final_text)
 
                     # Log to daily memory

@@ -37,6 +37,25 @@ chmod +x "$DESKTOP_FILE"
 echo "✅ Binario instalado en: $WRAPPER_SCRIPT"
 echo "✅ Acceso directo instalado en: $DESKTOP_FILE"
 echo ""
+
+# Si se detecta GNOME o está instalado gnome-shell, ofrecer/instalar la extensión
+if command -v gnome-shell >/dev/null 2>&1; then
+    echo "--- INSTALANDO EXTENSIÓN DE GNOME SHELL ---"
+    "$BASE_DIR/scripts/install_gnome_extension.sh" || true
+    echo ""
+fi
+
+echo "--- CONFIGURACIÓN RECOMENDADA PARA GNOME SHELL ---"
+cat << 'EOF'
+La extensión para la barra superior ha sido instalada y registrada en:
+  ~/.local/share/gnome-shell/extensions/pequeno-asistente@gatovillano.com
+
+• Clic izquierdo en el icono: Despliega / Oculta el asistente inmediatamente.
+• Clic derecho en el icono: Abre el menú contextual (Configuración, Limpiar, Reiniciar, Salir).
+• En sesiones Wayland, la primera vez puede requerir cerrar sesión e iniciarla nuevamente para que GNOME Shell monte la extensión.
+EOF
+
+echo ""
 echo "--- CONFIGURACIÓN RECOMENDADA PARA HYPRLAND (~/.config/hypr/hyprland.conf) ---"
 cat << 'EOF'
 # Ventana flotante estilo dropdown

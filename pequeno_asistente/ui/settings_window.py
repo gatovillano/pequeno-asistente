@@ -33,13 +33,15 @@ class SettingsWindow(Adw.PreferencesWindow):
         config_manager: ConfigManager,
         memory_manager: MemoryManager,
         on_sync_needed: Optional[Callable[[], None]] = None,
-        on_model_changed: Optional[Callable[[str], None]] = None
+        on_model_changed: Optional[Callable[[str], None]] = None,
+        on_audio_changed: Optional[Callable[[], None]] = None
     ):
         super().__init__()
         self.config_manager = config_manager
         self.memory_manager = memory_manager
         self.on_sync_needed = on_sync_needed or (lambda: None)
         self.on_model_changed = on_model_changed or (lambda m: None)
+        self.on_audio_changed = on_audio_changed or (lambda: None)
 
         self.set_title("Configuración - Pequeño Asistente")
         self.set_default_size(780, 680)
@@ -54,6 +56,7 @@ class SettingsWindow(Adw.PreferencesWindow):
         self._build_models_page()
         self._build_api_keys_page()
         self._build_mcp_catalog_page()
+        self._build_audio_page()
         self._build_memory_page()
         self._build_desktop_integration_page()
 
@@ -1140,6 +1143,414 @@ class SettingsWindow(Adw.PreferencesWindow):
         waybar_grp.add(waybar_label)
         page.add(waybar_grp)
 
+        self.add(page)
+
+    def _build_audio_page(self):
+        page = Adw.PreferencesPage()
+        page.set_title("Voz y Audio")
+        page.set_icon_name("audio-input-microphone-symbolic")
+
+        whisper_grp = Adw.PreferencesGroup()
+        whisper_grp.set_title("Transcripción de Voz (faster-whisper)")
+        whisper_grp.set_description("Configura el modelo y motor de reconocimiento de voz para el botón de micrófono del chat.")
+
+        # Model size dropdown/combo
+        audio_cfg = self.config_manager.get_audio_config()
+        current_model = audio_cfg.get("whisper_model", "tiny")
+
+        models = [
+            ("tiny", "tiny — Ultraligero (~75 MB, alta velocidad en CPU)"),
+            ("base", "base — Ligero y balanceado (~140 MB, óptimo para español)"),
+            ("small", "small — Precisión avanzada (~460 MB)")
+        ]
+        model_names = [m[1] for m in models]
+        model_keys = [m[0] for m in models]
+
+        active_idx = 0
+        if current_model in model_keys:
+            active_idx = model_keys.index(current_model)
+
+        model_row = Adw.ComboRow(
+            title="Tamaño del Modelo faster-whisper",
+            subtitle="Se descargará automáticamente al transcribir por primera vez"
+        )
+        model_row.set_model(Gtk.StringList.new(model_names))
+        model_row.set_selected(active_idx)
+
+        def _on_model_selected(_row, _param):
+            idx = model_row.get_selected()
+            if 0 <= idx < len(model_keys):
+                selected = model_keys[idx]
+                self.config_manager.set_whisper_model(selected)
+                self.on_audio_changed()
+
+        model_row.connect("notify::selected", _on_model_selected)
+        whisper_grp.add(model_row)
+
+        # Language row
+        current_lang = audio_cfg.get("language")
+        langs = [
+            (None, "Auto-detectar idioma (Español, Inglés, etc.)"),
+            ("es", "Español (es)"),
+            ("en", "Inglés (en)")
+        ]
+        lang_names = [l[1] for l in langs]
+        lang_keys = [l[0] for l in langs]
+        active_lang_idx = 0
+        if current_lang in lang_keys:
+            active_lang_idx = lang_keys.index(current_lang)
+
+        lang_row = Adw.ComboRow(title="Idioma de Transcripción", subtitle="Idioma preferido para el reconocimiento")
+        lang_row.set_model(Gtk.StringList.new(lang_names))
+        lang_row.set_selected(active_lang_idx)
+
+        def _on_lang_selected(_row, _param):
+            idx = lang_row.get_selected()
+            if 0 <= idx < len(lang_keys):
+                selected_l = lang_keys[idx]
+                self.config_manager.data["audio"]["language"] = selected_l
+                self.config_manager.save()
+                self.on_audio_changed()
+
+        lang_row.connect("notify::selected", _on_lang_selected)
+        whisper_grp.add(lang_row)
+
+        # Backend status row
+        backend_row = Adw.ActionRow(title="Backend de Captura de Audio")
+        import shutil
+        if shutil.which("pw-record"):
+            status_text = "pw-record (PipeWire nativo)"
+            status_cls = "status-pill"
+        elif shutil.which("ffmpeg"):
+            status_text = "ffmpeg (PulseAudio / PipeWire)"
+            status_cls = "status-pill"
+        elif shutil.which("arecord"):
+            status_text = "arecord (ALSA)"
+            status_cls = "status-pill"
+        else:
+            status_text = "No detectado"
+            status_cls = "tool-badge-error"
+
+        backend_badge = Gtk.Label(label=status_text)
+        backend_badge.add_css_class(status_cls)
+        backend_row.add_suffix(backend_badge)
+        whisper_grp.add(backend_row)
+
+        page.add(whisper_grp)
+
+        # -------------------------------------------------------------
+        # SECCIÓN 2: PROVEEDOR PRINCIPAL DE VOZ (TTS)
+        # -------------------------------------------------------------
+        tts_provider_grp = Adw.PreferencesGroup()
+        tts_provider_grp.set_title("Motor de Síntesis de Voz (TTS)")
+        tts_provider_grp.set_description(
+            "Escoge si deseas usar ElevenLabs (hiperrealista) o Kokoro TTS (local gratuito). "
+            "Si se agota tu cuota de ElevenLabs, el asistente pasará automáticamente a Kokoro."
+        )
+
+        kokoro_cfg = self.config_manager.get_kokoro_config()
+        el_cfg = self.config_manager.get_elevenlabs_config()
+
+        providers = [
+            ("kokoro", "Kokoro TTS / Local (Gratis, Docker localhost:8011)"),
+            ("elevenlabs", "ElevenLabs (Máxima Calidad con Respaldo Automático a Kokoro)")
+        ]
+        provider_keys = [p[0] for p in providers]
+        provider_labels = [p[1] for p in providers]
+
+        active_provider = self.config_manager.get_tts_provider()
+        prov_idx = 0
+        if active_provider in provider_keys:
+            prov_idx = provider_keys.index(active_provider)
+
+        provider_row = Adw.ComboRow(
+            title="Motor de Voz Activo",
+            subtitle="Proveedor que genera la voz del asistente"
+        )
+        provider_row.set_model(Gtk.StringList.new(provider_labels))
+        provider_row.set_selected(prov_idx)
+
+        def _on_provider_changed(row, _param):
+            idx = row.get_selected()
+            if 0 <= idx < len(provider_keys):
+                self.config_manager.set_tts_provider(provider_keys[idx])
+                self.on_audio_changed()
+
+        provider_row.connect("notify::selected", _on_provider_changed)
+        tts_provider_grp.add(provider_row)
+
+        # Switches globales
+        speak_on_voice_row = Adw.SwitchRow(
+            title="Responder directo con voz al recibir audio",
+            subtitle="Cuando dictas con el micrófono, el asistente responde hablando directamente"
+        )
+        speak_on_voice_row.set_active(kokoro_cfg.get("speak_on_voice_input", True))
+        def _on_speak_voice_toggled(row, _param):
+            self.config_manager.set_kokoro_config({"speak_on_voice_input": row.get_active()})
+            self.on_audio_changed()
+        speak_on_voice_row.connect("notify::active", _on_speak_voice_toggled)
+        tts_provider_grp.add(speak_on_voice_row)
+
+        auto_send_row = Adw.SwitchRow(
+            title="Auto-enviar al finalizar la grabación",
+            subtitle="Envía automáticamente el mensaje al detener la grabación con el micrófono"
+        )
+        auto_send_row.set_active(audio_cfg.get("auto_send_on_voice", True))
+        def _on_auto_send_toggled(row, _param):
+            self.config_manager.data["audio"]["auto_send_on_voice"] = row.get_active()
+            self.config_manager.save()
+            self.on_audio_changed()
+        auto_send_row.connect("notify::active", _on_auto_send_toggled)
+        tts_provider_grp.add(auto_send_row)
+
+        page.add(tts_provider_grp)
+
+        # -------------------------------------------------------------
+        # SECCIÓN 3: CONFIGURACIÓN DE ELEVENLABS
+        # -------------------------------------------------------------
+        el_grp = Adw.PreferencesGroup()
+        el_grp.set_title("Configuración de ElevenLabs")
+        el_grp.set_description("Audio hiperrealista con respiración y entonación humana natural (https://elevenlabs.io).")
+
+        # Switch: Respaldo automático a Kokoro
+        fallback_row = Adw.SwitchRow(
+            title="Respaldo automático a Kokoro (Jorge)",
+            subtitle="Al agotarse los créditos del plan gratuito o haber error de cuota, usa Kokoro sin interrumpir la voz"
+        )
+        fallback_row.set_active(el_cfg.get("fallback_to_kokoro", True))
+        def _on_fallback_toggled(row, _param):
+            self.config_manager.set_elevenlabs_config({"fallback_to_kokoro": row.get_active()})
+            self.on_audio_changed()
+        fallback_row.connect("notify::active", _on_fallback_toggled)
+        el_grp.add(fallback_row)
+
+        # API Key de ElevenLabs
+        key_row = Adw.PasswordEntryRow(title="API Key de ElevenLabs")
+        key_row.set_text(el_cfg.get("api_key", ""))
+        save_key_btn = Gtk.Button(label="Guardar")
+        save_key_btn.add_css_class("suggested-action")
+        def _on_save_key(_btn):
+            k = key_row.get_text().strip()
+            self.config_manager.set_elevenlabs_config({"api_key": k})
+            self.on_audio_changed()
+            save_key_btn.set_label("✓ Guardado")
+            GLib.timeout_add(1500, lambda: (save_key_btn.set_label("Guardar"), False)[1])
+        save_key_btn.connect("clicked", _on_save_key)
+        key_row.add_suffix(save_key_btn)
+        el_grp.add(key_row)
+
+        # Selector de Voces de ElevenLabs
+        el_voices = [
+            ("ErXwobaYiN019PkySvjV", "Antoni (Masculino - Excelente en Español - Recomendada)"),
+            ("JBFqnCBsd6RMkjVDRZzb", "George / Jorge (Masculino - Cálido y Natural)"),
+            ("21m00Tcm4TlvDq8ikWAM", "Rachel (Femenino - Calma y Clara)"),
+            ("pNInz6obpgDQGcFmaJgB", "Adam (Masculino - Profundo y Cálido)"),
+            ("TxGEqnHWrfWFTfGW9XjX", "Josh (Masculino - Joven y Natural)"),
+            ("VR6AewLTigWG4xSOukaG", "Arnold (Masculino - Claro y Preciso)"),
+            ("EXAVITQu4vr4xnSDxMaL", "Bella / Sarah (Femenino - Suave y Dulce)"),
+            ("AZnzlk1XvdvUeBnXmlld", "Domi (Femenino - Firme y Expresiva)"),
+            ("MF3mGyEYCl7XYWbV9V6O", "Elli (Femenino - Amable y Calurosa)"),
+            ("custom", "Otra (Personalizada por Voice ID)")
+        ]
+        el_voice_keys = [v[0] for v in el_voices]
+        el_voice_labels = [v[1] for v in el_voices]
+
+        curr_el_voice = el_cfg.get("voice_id", "ErXwobaYiN019PkySvjV")
+        el_voice_idx = 0
+        if curr_el_voice in el_voice_keys:
+            el_voice_idx = el_voice_keys.index(curr_el_voice)
+        else:
+            el_voice_idx = el_voice_keys.index("custom")
+
+        el_voice_row = Adw.ComboRow(
+            title="Voz de ElevenLabs",
+            subtitle="Voz utilizada para la síntesis de ElevenLabs"
+        )
+        el_voice_row.set_model(Gtk.StringList.new(el_voice_labels))
+        el_voice_row.set_selected(el_voice_idx)
+
+        # Entrada para Voice ID personalizado
+        custom_voice_row = Adw.EntryRow(title="Voice ID Personalizado")
+        custom_voice_row.set_text(curr_el_voice)
+        save_custom_voice_btn = Gtk.Button(label="Guardar")
+        save_custom_voice_btn.add_css_class("suggested-action")
+        def _on_save_custom_voice(_btn):
+            vid = custom_voice_row.get_text().strip()
+            if vid:
+                self.config_manager.set_elevenlabs_config({"voice_id": vid})
+                self.on_audio_changed()
+                save_custom_voice_btn.set_label("✓ Guardado")
+                GLib.timeout_add(1500, lambda: (save_custom_voice_btn.set_label("Guardar"), False)[1])
+        save_custom_voice_btn.connect("clicked", _on_save_custom_voice)
+        custom_voice_row.add_suffix(save_custom_voice_btn)
+        custom_voice_row.set_visible(el_voice_idx == el_voice_keys.index("custom"))
+
+        def _on_el_voice_changed(row, _param):
+            idx = row.get_selected()
+            if 0 <= idx < len(el_voice_keys):
+                selected_key = el_voice_keys[idx]
+                is_custom = selected_key == "custom"
+                custom_voice_row.set_visible(is_custom)
+                if not is_custom:
+                    custom_voice_row.set_text(selected_key)
+                    self.config_manager.set_elevenlabs_config({"voice_id": selected_key})
+                    self.on_audio_changed()
+
+        el_voice_row.connect("notify::selected", _on_el_voice_changed)
+        el_grp.add(el_voice_row)
+        el_grp.add(custom_voice_row)
+
+        # Selector de Modelo de ElevenLabs
+        el_models = [
+            ("eleven_multilingual_v2", "eleven_multilingual_v2 (Máxima calidad y entonación en español)"),
+            ("eleven_flash_v2_5", "eleven_flash_v2_5 (Ultra baja latencia ~75ms y menor consumo de créditos)"),
+            ("eleven_turbo_v2_5", "eleven_turbo_v2_5 (Baja latencia y gran calidad)")
+        ]
+        el_model_keys = [m[0] for m in el_models]
+        el_model_labels = [m[1] for m in el_models]
+
+        curr_model = el_cfg.get("model_id", "eleven_multilingual_v2")
+        el_model_idx = 0
+        if curr_model in el_model_keys:
+            el_model_idx = el_model_keys.index(curr_model)
+
+        el_model_row = Adw.ComboRow(
+            title="Modelo de ElevenLabs",
+            subtitle="Modelo de red neuronal para la síntesis"
+        )
+        el_model_row.set_model(Gtk.StringList.new(el_model_labels))
+        el_model_row.set_selected(el_model_idx)
+
+        def _on_el_model_changed(row, _param):
+            idx = row.get_selected()
+            if 0 <= idx < len(el_model_keys):
+                self.config_manager.set_elevenlabs_config({"model_id": el_model_keys[idx]})
+                self.on_audio_changed()
+
+        el_model_row.connect("notify::selected", _on_el_model_changed)
+        el_grp.add(el_model_row)
+
+        page.add(el_grp)
+
+        # -------------------------------------------------------------
+        # SECCIÓN 4: CONFIGURACIÓN DE KOKORO TTS (LOCAL)
+        # -------------------------------------------------------------
+        kokoro_grp = Adw.PreferencesGroup()
+        kokoro_grp.set_title("Configuración de Kokoro TTS (Local)")
+        kokoro_grp.set_description("Servidor local en Docker (puerto 8011). También actúa como respaldo automático de ElevenLabs.")
+
+        # URL del contenedor Docker
+        url_entry = Adw.EntryRow(title="URL del Servidor Kokoro TTS")
+        url_entry.set_text(kokoro_cfg.get("url", "http://localhost:8011"))
+        save_url_btn = Gtk.Button(label="Guardar")
+        save_url_btn.add_css_class("suggested-action")
+        def _on_save_url(_btn):
+            new_u = url_entry.get_text().strip().rstrip("/")
+            if new_u:
+                self.config_manager.set_kokoro_config({"url": new_u})
+                self.on_audio_changed()
+                save_url_btn.set_label("✓ Guardado")
+                GLib.timeout_add(1500, lambda: (save_url_btn.set_label("Guardar"), False)[1])
+        save_url_btn.connect("clicked", _on_save_url)
+        url_entry.add_suffix(save_url_btn)
+        kokoro_grp.add(url_entry)
+
+        # Selector de Voz de Kokoro
+        known_voices = [
+            ("es-MX-JorgeNeural", "es-MX-JorgeNeural (México Masculino - Recomendada)"),
+            ("ef_dora", "ef_dora (Español Femenino)"),
+            ("em_alex", "em_alex (Español Masculino)"),
+            ("es-MX-DaliaNeural", "es-MX-DaliaNeural (México Femenino)"),
+            ("es-ES-AlvaroNeural", "es-ES-AlvaroNeural (España Masculino)"),
+            ("af_heart", "af_heart (Inglés Femenino)"),
+            ("am_adam", "am_adam (Inglés Masculino)")
+        ]
+        voice_keys = [v[0] for v in known_voices]
+        voice_labels = [v[1] for v in known_voices]
+
+        curr_voice = kokoro_cfg.get("voice", "es-MX-JorgeNeural")
+        voice_idx = 0
+        if curr_voice in voice_keys:
+            voice_idx = voice_keys.index(curr_voice)
+
+        voice_row = Adw.ComboRow(
+            title="Voz de Kokoro",
+            subtitle="Voz utilizada para la síntesis local en español"
+        )
+        voice_row.set_model(Gtk.StringList.new(voice_labels))
+        voice_row.set_selected(voice_idx)
+
+        def _on_voice_changed(row, _param):
+            idx = row.get_selected()
+            if 0 <= idx < len(voice_keys):
+                chosen_voice = voice_keys[idx]
+                self.config_manager.set_kokoro_config({"voice": chosen_voice})
+                self.on_audio_changed()
+
+        voice_row.connect("notify::selected", _on_voice_changed)
+        kokoro_grp.add(voice_row)
+        page.add(kokoro_grp)
+
+        # -------------------------------------------------------------
+        # SECCIÓN 5: PRUEBA DE AUDIO Y CONEXIÓN
+        # -------------------------------------------------------------
+        test_grp = Adw.PreferencesGroup()
+        test_grp.set_title("Prueba de Audio y Conexión")
+        test_grp.set_description("Comprueba la voz activa. Si ElevenLabs no tiene cuota, se escuchará Kokoro como respaldo.")
+
+        test_row = Adw.ActionRow(
+            title="Probar Síntesis de Voz",
+            subtitle="Genera una frase de prueba con el motor activo configurado"
+        )
+
+        test_spinner = Gtk.Spinner()
+        test_row.add_suffix(test_spinner)
+
+        test_btn = Gtk.Button(label="🔊 Probar Voz")
+        test_btn.add_css_class("flat")
+        
+        def _on_test_clicked(_btn):
+            test_spinner.start()
+            test_btn.set_sensitive(False)
+
+            from pequeno_asistente.audio.tts import UnifiedTTS
+            audio_c = self.config_manager.get_audio_config()
+            k_c = self.config_manager.get_kokoro_config()
+            e_c = self.config_manager.get_elevenlabs_config()
+
+            tts_client = UnifiedTTS(
+                provider=audio_c.get("tts_provider", "kokoro"),
+                kokoro_url=k_c.get("url", "http://localhost:8011"),
+                kokoro_voice=k_c.get("voice", "es-MX-JorgeNeural"),
+                kokoro_speed=float(k_c.get("speed", 1.0)),
+                kokoro_lang=k_c.get("lang", "es"),
+                elevenlabs_api_key=e_c.get("api_key", ""),
+                elevenlabs_voice_id=e_c.get("voice_id", "ErXwobaYiN019PkySvjV"),
+                elevenlabs_model_id=e_c.get("model_id", "eleven_multilingual_v2"),
+                fallback_to_kokoro=e_c.get("fallback_to_kokoro", True),
+                enabled=True
+            )
+
+            def finish_test():
+                def _ui():
+                    test_spinner.stop()
+                    test_btn.set_sensitive(True)
+                    if tts_client.last_fallback_occurred:
+                        test_row.set_subtitle("✓ Se utilizó Kokoro como respaldo (ElevenLabs sin cuota o clave).")
+                    else:
+                        test_row.set_subtitle(f"✓ Audio reproducido correctamente con {tts_client.last_used_provider.capitalize()}.")
+                    return False
+                GLib.idle_add(_ui)
+
+            test_text = (
+                "¡Hola! Soy tu asistente de voz. La síntesis de audio está configurada y lista para hablar."
+            )
+            tts_client.speak_async(test_text, on_finish=finish_test)
+
+        test_btn.connect("clicked", _on_test_clicked)
+        test_row.add_suffix(test_btn)
+        test_grp.add(test_row)
+        page.add(test_grp)
         self.add(page)
 
     def _on_temp_changed(self, spin_btn):

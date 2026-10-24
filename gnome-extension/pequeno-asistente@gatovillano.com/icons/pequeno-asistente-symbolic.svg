@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <!-- Antenna stem & light -->
+  <circle cx="8" cy="1.75" r="1.1" fill="currentColor"/>
+  <rect x="7.3" y="2.5" width="1.4" height="1.8" fill="currentColor"/>
+
+  <!-- Robot Head Outline / Body -->
+  <rect x="2.5" y="4.5" width="11" height="8.75" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.3"/>
+
+  <!-- Left & Right Ears -->
+  <rect x="1" y="7" width="1.2" height="3.75" rx="0.6" fill="currentColor"/>
+  <rect x="13.8" y="7" width="1.2" height="3.75" rx="0.6" fill="currentColor"/>
+
+  <!-- Eyes -->
+  <circle cx="5.5" cy="8.2" r="1.15" fill="currentColor"/>
+  <circle cx="10.5" cy="8.2" r="1.15" fill="currentColor"/>
+
+  <!-- Smile Curve -->
+  <path d="M 5.6 11 Q 8 12.3 10.4 11" stroke="currentColor" stroke-width="1" stroke-linecap="round" fill="none"/>
+</svg>

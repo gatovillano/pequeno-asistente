@@ -64,14 +64,39 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         }
     },
     "ui": {
-        "window_width": 480,
-        "window_height": 650,
+        "window_width": 440,
+        "window_height": 590,
         "always_on_top": True,
         "theme": "dark"
     },
     "memory": {
         "auto_log": True,
         "inject_memory": True
+    },
+    "audio": {
+        "whisper_model": "tiny",
+        "language": None,
+        "device": "cpu",
+        "compute_type": "int8",
+        "auto_send_on_voice": True,
+        "tts_provider": "kokoro",
+        "kokoro": {
+            "enabled": True,
+            "url": "http://localhost:8011",
+            "voice": "es-MX-JorgeNeural",
+            "speed": 1.0,
+            "lang": "es",
+            "speak_on_voice_input": True
+        },
+        "elevenlabs": {
+            "enabled": True,
+            "api_key": "",
+            "voice_id": "ErXwobaYiN019PkySvjV",
+            "model_id": "eleven_multilingual_v2",
+            "stability": 0.5,
+            "similarity_boost": 0.75,
+            "fallback_to_kokoro": True
+        }
     }
 }
 
@@ -98,7 +123,7 @@ class ConfigManager:
                 data = json.load(f)
             
             # Ensure top-level sections exist without overwriting user values
-            for k in ("llm", "ui", "memory", "mcp_servers", "mcp_registries"):
+            for k in ("llm", "ui", "memory", "audio", "mcp_servers", "mcp_registries"):
                 if k not in data:
                     data[k] = json.loads(json.dumps(DEFAULT_CONFIG.get(k, {})))
 
@@ -110,6 +135,19 @@ class ConfigManager:
             for subk, subv in DEFAULT_CONFIG["memory"].items():
                 if subk not in data["memory"]:
                     data["memory"][subk] = subv
+
+            if "audio" not in data:
+                data["audio"] = json.loads(json.dumps(DEFAULT_CONFIG.get("audio", {})))
+            else:
+                for subk, subv in DEFAULT_CONFIG["audio"].items():
+                    if subk not in data["audio"]:
+                        data["audio"][subk] = subv
+                if "kokoro" not in data["audio"]:
+                    data["audio"]["kokoro"] = json.loads(json.dumps(DEFAULT_CONFIG["audio"]["kokoro"]))
+                else:
+                    for ksub, kval in DEFAULT_CONFIG["audio"]["kokoro"].items():
+                        if ksub not in data["audio"]["kokoro"]:
+                            data["audio"]["kokoro"][ksub] = kval
 
             if "api_keys" not in data["llm"]:
                 data["llm"]["api_keys"] = {}
@@ -269,3 +307,43 @@ class ConfigManager:
         base_url = self.data["llm"].get("ollama_base_url")
         if base_url:
             os.environ["OLLAMA_API_BASE"] = base_url
+
+    def get_audio_config(self) -> Dict[str, Any]:
+        if "audio" not in self.data:
+            self.data["audio"] = json.loads(json.dumps(DEFAULT_CONFIG.get("audio", {})))
+        return self.data["audio"]
+
+    def set_whisper_model(self, model: str):
+        if "audio" not in self.data:
+            self.data["audio"] = json.loads(json.dumps(DEFAULT_CONFIG.get("audio", {})))
+        self.data["audio"]["whisper_model"] = model
+        self.save()
+
+    def get_tts_provider(self) -> str:
+        return self.get_audio_config().get("tts_provider", "kokoro")
+
+    def set_tts_provider(self, provider: str):
+        self.get_audio_config()["tts_provider"] = provider
+        self.save()
+
+    def get_kokoro_config(self) -> Dict[str, Any]:
+        audio_cfg = self.get_audio_config()
+        if "kokoro" not in audio_cfg:
+            audio_cfg["kokoro"] = json.loads(json.dumps(DEFAULT_CONFIG["audio"]["kokoro"]))
+        return audio_cfg["kokoro"]
+
+    def set_kokoro_config(self, updates: Dict[str, Any]):
+        cfg = self.get_kokoro_config()
+        cfg.update(updates)
+        self.save()
+
+    def get_elevenlabs_config(self) -> Dict[str, Any]:
+        audio_cfg = self.get_audio_config()
+        if "elevenlabs" not in audio_cfg:
+            audio_cfg["elevenlabs"] = json.loads(json.dumps(DEFAULT_CONFIG["audio"]["elevenlabs"]))
+        return audio_cfg["elevenlabs"]
+
+    def set_elevenlabs_config(self, updates: Dict[str, Any]):
+        cfg = self.get_elevenlabs_config()
+        cfg.update(updates)
+        self.save()

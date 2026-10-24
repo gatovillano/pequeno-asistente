@@ -1,0 +1,22 @@
+.pequeno-asistente-indicator {
+    padding: 0 4px;
+}
+
+.pequeno-asistente-icon {
+    icon-size: 16px;
+}
+
+.pequeno-asistente-header {
+    font-weight: bold;
+    font-size: 1.05em;
+}
+
+.pequeno-asistente-status-active {
+    color: #57e389;
+    font-size: 0.85em;
+}
+
+.pequeno-asistente-status-inactive {
+    color: #9a9996;
+    font-size: 0.85em;
+}

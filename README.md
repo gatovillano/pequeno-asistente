@@ -54,6 +54,34 @@ Un asistente de escritorio ágil, moderno y minimalista diseñado para Linux (Hy
    - Se despliega como un widget flotante en la esquina superior derecha con bordes redondeados y tema oscuro Libadwaita.
    - Se oculta/muestra al instante (socket IPC <5ms) con un atajo o clic en Waybar.
 
+6. **Gestión de Hilos de Conversación Persistentes (Multi-Thread)**:
+   - **Nuevo Hilo al Instante (`Ctrl+N` o botón ➕ en cabecera)**: Abre un hilo nuevo limpio sin perder tus conversaciones anteriores. También invocable por CLI con `pequeno-asistente -n`.
+   - **Historial Deslizante (`Ctrl+H` o botón 📑)**: Panel lateral integrado (`Adw.OverlaySplitView`) con buscador y lista cronológica de conversaciones relativas (*Hoy 14:30*, *Ayer*, etc.).
+   - **Titulación Automática**: Genera títulos concisos a partir del primer mensaje del usuario.
+   - **Restauración y Persistencia**: Historial guardado en JSON en `~/.config/pequeno-asistente/threads/` que restaura mensajes, bloques de código copiables y estados de ejecución MCP.
+   - **Gestión Cómoda**: Botón para eliminar hilos obsoletos y limpiar conversaciones.
+
+7. **Dictado por Voz con faster-whisper en el Input de Chat**:
+   - **Botón de Micrófono Integrado**: Situado en el cajón de entrada de texto para dictar consultas y mensajes.
+   - **Modelo Liviano faster-whisper (`tiny` / `base`)**: Transcripción rápida en local en CPU con cuantización int8 y bajo consumo de memoria.
+   - **Atajo Rápido (`Ctrl+M`)**: Pulsa `Ctrl+M` para iniciar o detener la grabación instantáneamente desde el teclado.
+   - **Grabación Nativa en Linux**: Detección automática de `pw-record` (PipeWire), `ffmpeg` y `arecord`.
+   - **Pestaña de Configuración (Voz y Audio)**: Selector de modelo (tiny, base, small), idioma de reconocimiento y estado del backend.
+
+8. **Síntesis de Voz Híbrida Inteligente (ElevenLabs + Kokoro TTS con Respaldo)**:
+   - **Selector de Motor en Configuración**: Escoge si prefieres la máxima fidelidad humana de **ElevenLabs** o la rapidez sin costo de **Kokoro TTS (Jorge)**.
+   - **Respaldo Automático Transparente (*Fallback*)**: Si seleccionas ElevenLabs y se agotan los créditos o la cuota del plan gratuito (o hay algún error de red/autorización), el asistente cambia automáticamente a Kokoro en tiempo real para no dejarte sin voz.
+   - **Catálogo de Voces Integrado**: Soporte para voces de ElevenLabs como Marcela (`PeRxbnxvwcESkQcDM8Fi`), Antoni, George, Rachel, Adam, o cualquier Voice ID clonado.
+   - **Streaming por Frases en Tiempo Real**: Procesa y reproduce el audio frase por frase con latencia ultrabaja a través de PipeWire (`pw-play`).
+   - **Botón de Audio en Respuestas (🔊)**: Cada respuesta del asistente incluye un botón para reproducir o detener la locución cuando lo desees.
+
+9. **Modo Llamada Manos Libres (Voice-to-Voice en Tiempo Real)**:
+   - **Conversación Fluida sin Botones**: Pulsa el botón de llamada (📞) en la cabecera o el atajo `Ctrl+L` para iniciar una llamada directa por voz.
+   - **Detección de Actividad de Voz (VAD)**: El micrófono permanece abierto en segundo plano, detectando con precisión cuándo empiezas y terminas de hablar sin pulsar teclas.
+   - **Orbe de Voz Pulsante e Interactivo**: Interfaz inmersiva con un orbe central que cambia de color y reacciona en tiempo real al volumen de tu voz (Escuchando, Pensando, Hablando).
+   - **Interrupción Instantánea (*Barge-in*)**: Si el asistente está hablando y comienzas a hablar, la reproducción se detiene automáticamente para escucharte.
+   - **Persistencia en el Chat**: Toda la conversación mantenida durante la llamada se guarda automáticamente en el hilo de chat actual al colgar.
+
 ---
 
 ## 🚀 Instalación y Puesta en Marcha
@@ -71,7 +99,17 @@ Ejecuta el script de instalación para registrar el comando `pequeno-asistente` 
 ./scripts/install_desktop.sh
 ```
 
-### 3. Integración con Waybar (Barra Superior)
+### 3. Integración con Barra Superior de GNOME Shell (Extensión Oficial)
+Si utilizas **GNOME Shell** (Ubuntu, Fedora, etc.):
+```bash
+./scripts/install_gnome_extension.sh
+```
+- **Icono en Panel Superior**: Añade un icono estilizado del asistente en la barra superior.
+- **Despliegue Rápido**: Haz clic izquierdo en el icono para desplegar/ocultar la ventana estilo dropdown instantáneamente bajo la barra.
+- **Menú Contextual**: Haz clic derecho en el icono para acceder a opciones rápidas: *Configuración*, *Limpiar conversación*, *Reiniciar* y *Salir*.
+- **Indicador de Estado**: Refleja visualmente si el servicio del asistente se encuentra activo o detenido.
+
+### 4. Integración con Waybar (Hyprland / Sway)
 Edita `~/.config/waybar/config.jsonc` y añade en `"modules-right"` el módulo:
 ```jsonc
 "custom/assistant": {
@@ -81,7 +119,7 @@ Edita `~/.config/waybar/config.jsonc` y añade en `"modules-right"` el módulo:
 }
 ```
 
-### 4. Atajo de Teclado en Hyprland
+### 5. Atajo de Teclado en Hyprland
 Añade a tu `~/.config/hypr/hyprland.conf`:
 ```ini
 # Ventana flotante estilo dropdown

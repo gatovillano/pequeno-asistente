@@ -1,0 +1,17 @@
+{
+  "name": "Pequeño Asistente",
+  "description": "Lanzador e indicador en la barra superior con despliegue dropdown para Pequeño Asistente.",
+  "uuid": "pequeno-asistente@gatovillano.com",
+  "shell-version": [
+    "45",
+    "46",
+    "47",
+    "48",
+    "49",
+    "50",
+    "50.0",
+    "50.1"
+  ],
+  "url": "https://github.com/gatovillano/pequeno-asistente",
+  "version": 1
+}
