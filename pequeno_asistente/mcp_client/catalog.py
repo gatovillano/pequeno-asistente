@@ -2,10 +2,24 @@
 Curated MCP Server Catalog for Pequeño Asistente.
 Contains pre-configured, tested MCP servers across multiple categories.
 """
+import sys
+from pathlib import Path
 from typing import Dict, Any, List
 
 MCP_CATALOG: Dict[str, Dict[str, Any]] = {
     # --- ESCRITORIO & SISTEMA ---
+    "pequeno-core": {
+        "name": "Pequeño Asistente Core (Por Defecto)",
+        "category": "Escritorio & Sistema",
+        "icon": "🤖",
+        "description": "Servidor MCP nativo instalado y conectado por defecto: Gestión de Memoria Episódica y Largo Plazo, Lectura de Documentos e Imágenes, Habilidades (Skills), Automatizaciones/Heartbeats y Seguridad.",
+        "command": sys.executable,
+        "args": ["-m", "pequeno_asistente.mcp_client.default_server"],
+        "transport": "stdio",
+        "env": {},
+        "requires_api_key": False,
+        "builtin": True
+    },
     "hypruse": {
         "name": "Hyprland Desktop (hypruse)",
         "category": "Escritorio & Sistema",
@@ -26,7 +40,13 @@ MCP_CATALOG: Dict[str, Dict[str, Any]] = {
         "icon": "📁",
         "description": "Permite al asistente leer, escribir, buscar y listar archivos en carpetas permitidas de tu equipo.",
         "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/gato/Proyectos", "/home/gato/Documentos", "/home/gato/Descargas"],
+        "args": [
+            "-y",
+            "@modelcontextprotocol/server-filesystem",
+            str(Path.home() / "Proyectos"),
+            str(Path.home() / "Documentos"),
+            str(Path.home() / "Descargas"),
+        ],
         "transport": "stdio",
         "env": {},
         "requires_api_key": False
@@ -138,7 +158,7 @@ MCP_CATALOG: Dict[str, Dict[str, Any]] = {
         "icon": "🗄️",
         "description": "Consulta esquemas y ejecuta consultas SQL en bases de datos SQLite locales.",
         "command": "uvx",
-        "args": ["mcp-server-sqlite", "--db-path", "/home/gato/.config/pequeno-asistente/asistente.db"],
+        "args": ["mcp-server-sqlite", "--db-path", str(Path.home() / ".config" / "pequeno-asistente" / "asistente.db")],
         "transport": "stdio",
         "env": {},
         "requires_api_key": False
@@ -162,7 +182,7 @@ MCP_CATALOG: Dict[str, Dict[str, Any]] = {
         "icon": "💎",
         "description": "Lee y busca notas dentro de tu bóveda de Markdown de Obsidian.",
         "command": "uvx",
-        "args": ["obsidian-mcp", "--vault-path", "/home/gato/Documentos/Obsidian"],
+        "args": ["obsidian-mcp", "--vault-path", str(Path.home() / "Documentos" / "Obsidian")],
         "transport": "stdio",
         "env": {},
         "requires_api_key": False
@@ -196,7 +216,7 @@ MCP_CATALOG: Dict[str, Dict[str, Any]] = {
         "category": "Productividad & Audio",
         "icon": "🎹",
         "description": "Control de transporte, pistas, clips, dispositivos e instrumentos en Bitwig Studio.",
-        "command": "/home/gato/Proyectos/bitwig_agent/python/.venv/bin/bitwig-agent-mcp",
+        "command": str(Path.home() / "Proyectos" / "bitwig_agent" / "python" / ".venv" / "bin" / "bitwig-agent-mcp"),
         "args": [],
         "transport": "stdio",
         "env": {
@@ -209,13 +229,14 @@ MCP_CATALOG: Dict[str, Dict[str, Any]] = {
         "category": "Productividad & Audio",
         "icon": "🧠",
         "description": "Conexión directa con la pasarela de KognitoAI.",
-        "command": "/home/gato/Proyectos/KognitoAI/mcp_server/run.sh",
+        "command": str(Path.home() / "Proyectos" / "KognitoAI" / "mcp_server" / "run.sh"),
         "args": [],
         "transport": "stdio",
         "env": {
-            "KOGNITO_ACCOUNT_ID": "5b8d59b0-69b7-4aa8-9bb0-bf07511222a6"
+            "KOGNITO_ACCOUNT_ID": ""
         },
-        "requires_api_key": False
+        "requires_api_key": True,
+        "api_key_env": "KOGNITO_ACCOUNT_ID"
     }
 }
 

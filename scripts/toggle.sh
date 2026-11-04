@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # Toggle Pequeño Asistente window or launch if not running
 
+if [ -x "$HOME/.local/bin/pequeno-asistente" ]; then
+    exec "$HOME/.local/bin/pequeno-asistente" --toggle
+elif command -v pequeno-asistente >/dev/null 2>&1; then
+    exec pequeno-asistente --toggle
+fi
+
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON_BIN="$BASE_DIR/.venv/bin/python"
 

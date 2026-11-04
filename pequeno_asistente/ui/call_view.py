@@ -7,6 +7,7 @@ import time
 import math
 from typing import Optional, Callable
 
+import cairo
 import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
@@ -16,14 +17,15 @@ from gi.repository import Gtk, Adw, GLib, Pango, Gdk
 
 class VoiceOrb(Gtk.DrawingArea):
     """
-    Animated pulsating Voice Orb drawn with Cairo.
-    Reacts dynamically to real-time audio levels and call states.
+    Animated diffuse Voice Orb drawn with Cairo.
+    Features organic fluid shape deformation (morphing blob), soft blur glow,
+    zero hard borders, and real-time audio reactivity.
     """
 
     def __init__(self):
         super().__init__()
-        self.set_content_width(180)
-        self.set_content_height(180)
+        self.set_content_width(220)
+        self.set_content_height(220)
         self.set_halign(Gtk.Align.CENTER)
         self.set_valign(Gtk.Align.CENTER)
 
@@ -31,11 +33,16 @@ class VoiceOrb(Gtk.DrawingArea):
         self.level = 0.0  # 0.0 to 1.0
         self.smoothed_level = 0.0
         self.phase = 0.0
+        self.is_light = False
 
         self.set_draw_func(self._draw)
 
-        # 30 FPS pulse animation
+        # 30 FPS pulse & morph animation
         self._anim_tag = GLib.timeout_add(33, self._on_animate)
+
+    def set_theme(self, is_light: bool):
+        self.is_light = bool(is_light)
+        self.queue_draw()
 
     def set_state(self, state: str):
         self.state = state
@@ -45,80 +52,198 @@ class VoiceOrb(Gtk.DrawingArea):
         self.level = max(0.0, min(1.0, level))
 
     def _on_animate(self):
-        self.phase += 0.08
-        if self.phase > 2 * math.pi:
-            self.phase -= 2 * math.pi
+        if not self.get_mapped():
+            return True
+
+        # Phase advance varies smoothly by state activity
+        speed_delta = 0.05
+        if self.state == "thinking":
+            speed_delta = 0.09
+        elif self.state == "user_speaking":
+            speed_delta = 0.06 + 0.05 * self.smoothed_level
+        elif self.state == "assistant_speaking":
+            speed_delta = 0.07
+        elif self.state == "muted":
+            speed_delta = 0.02
+
+        self.phase += speed_delta
+        if self.phase > 2 * math.pi * 100:
+            self.phase -= 2 * math.pi * 100
 
         # Smooth audio level transition
         target = self.level
-        self.smoothed_level = self.smoothed_level * 0.75 + target * 0.25
+        self.smoothed_level = self.smoothed_level * 0.72 + target * 0.28
 
         self.queue_draw()
         return True
 
+    @staticmethod
+    def _create_organic_blob_path(cr, center_x, center_y, base_r, harmonics, phase_val, n_pts=48):
+        """
+        Creates a closed, perfectly smooth C1 spline path with harmonic deformations.
+        Uses quadratic-to-cubic Bezier midpoint interpolation to eliminate all sharp vertices.
+        """
+        pts = []
+        for i in range(n_pts):
+            angle = (2.0 * math.pi * i) / n_pts
+            r = base_r
+            for freq, amp, speed, offset in harmonics:
+                r += amp * math.sin(freq * angle + phase_val * speed + offset)
+            pts.append((center_x + r * math.cos(angle), center_y + r * math.sin(angle)))
+
+        cr.new_path()
+        p_last = pts[-1]
+        p_first = pts[0]
+        mid_prev = ((p_last[0] + p_first[0]) / 2.0, (p_last[1] + p_first[1]) / 2.0)
+        cr.move_to(mid_prev[0], mid_prev[1])
+
+        for i in range(n_pts):
+            p_curr = pts[i]
+            p_next = pts[(i + 1) % n_pts]
+            mid_curr = ((p_curr[0] + p_next[0]) / 2.0, (p_curr[1] + p_next[1]) / 2.0)
+            cp1_x = mid_prev[0] + (2.0 / 3.0) * (p_curr[0] - mid_prev[0])
+            cp1_y = mid_prev[1] + (2.0 / 3.0) * (p_curr[1] - mid_prev[1])
+            cp2_x = mid_curr[0] + (2.0 / 3.0) * (p_curr[0] - mid_curr[0])
+            cp2_y = mid_curr[1] + (2.0 / 3.0) * (p_curr[1] - mid_curr[1])
+            cr.curve_to(cp1_x, cp1_y, cp2_x, cp2_y, mid_curr[0], mid_curr[1])
+            mid_prev = mid_curr
+        cr.close_path()
+
     def _draw(self, _area, cr, width, height):
         cx = width / 2.0
         cy = height / 2.0
-        base_radius = min(width, height) * 0.28
+        base_radius = min(width, height) * 0.26
 
-        # Color schemes by state (R, G, B)
+        # Color schemes & morph dynamics by state (R, G, B)
         if self.state == "listening":
-            # Calm Emerald / Cyan
-            color_core = (0.23, 0.78, 0.65)
-            color_glow = (0.15, 0.65, 0.55)
-            pulse_amp = 0.06 * math.sin(self.phase * 1.5)
+            # Serene Emerald / Soft Cyan diffuse glow
+            color_core = (0.20, 0.86, 0.72)
+            color_glow = (0.08, 0.62, 0.54)
+            color_highlight = (0.70, 1.00, 0.92)
+            morph_energy = 0.22
+            speed_mult = 1.0
         elif self.state == "user_speaking":
-            # Active Neon Cyan / Green
-            color_core = (0.20, 0.90, 0.85)
-            color_glow = (0.10, 0.75, 0.70)
-            pulse_amp = 0.22 * self.smoothed_level + 0.08 * math.sin(self.phase * 3.0)
+            # Vibrant Electric Cyan / Aquamarine reactive fluid
+            color_core = (0.16, 0.92, 0.88)
+            color_glow = (0.06, 0.70, 0.65)
+            color_highlight = (0.82, 1.00, 0.98)
+            morph_energy = 0.40 + 1.35 * self.smoothed_level
+            speed_mult = 1.5
         elif self.state == "thinking":
-            # Amber / Warm Gold
-            color_core = (0.95, 0.70, 0.20)
-            color_glow = (0.85, 0.55, 0.15)
-            pulse_amp = 0.12 * math.sin(self.phase * 4.0)
+            # Swirling Warm Amber / Molten Gold
+            color_core = (0.98, 0.72, 0.18)
+            color_glow = (0.85, 0.48, 0.10)
+            color_highlight = (1.00, 0.94, 0.68)
+            morph_energy = 0.65
+            speed_mult = 2.0
         elif self.state == "assistant_speaking":
-            # Radiant Purple / Indigo / Magenta
-            color_core = (0.65, 0.45, 0.95)
-            color_glow = (0.50, 0.30, 0.85)
-            pulse_amp = 0.18 * math.sin(self.phase * 2.5) + 0.05
+            # Radiant Ultraviolet / Neon Purple / Magenta
+            color_core = (0.68, 0.42, 0.98)
+            color_glow = (0.45, 0.22, 0.85)
+            color_highlight = (0.92, 0.78, 1.00)
+            morph_energy = 0.70 + 0.40 * math.sin(self.phase * 2.2)
+            speed_mult = 1.7
         elif self.state == "muted":
-            # Muted Charcoal / Red tint
-            color_core = (0.60, 0.30, 0.35)
-            color_glow = (0.45, 0.20, 0.25)
-            pulse_amp = 0.0
+            # Muted Twilight Slate / Soft Rose tint
+            color_core = (0.55, 0.28, 0.32)
+            color_glow = (0.38, 0.18, 0.22)
+            color_highlight = (0.75, 0.50, 0.55)
+            morph_energy = 0.08
+            speed_mult = 0.5
         else:
             color_core = (0.35, 0.40, 0.55)
             color_glow = (0.25, 0.30, 0.45)
-            pulse_amp = 0.0
+            color_highlight = (0.60, 0.65, 0.80)
+            morph_energy = 0.15
+            speed_mult = 1.0
 
-        dynamic_radius = base_radius * (1.0 + pulse_amp)
+        p = self.phase * speed_mult
 
-        # 1. Outer ambient glow ring
+        # Dynamic breathing radius with audio expansion
+        dyn_radius = base_radius * (1.0 + 0.06 * math.sin(p * 1.1) + 0.15 * self.smoothed_level)
+
+        # -----------------------------------------------------------------
+        # 1. Broad Diffuse Ambient Blur Aura (outer misty halo, zero borders)
+        # -----------------------------------------------------------------
+        for r_scale, alpha_val in [(1.85, 0.14), (1.50, 0.22), (1.25, 0.35)]:
+            cr.save()
+            self._create_organic_blob_path(cr, cx, cy, dyn_radius * r_scale, [
+                (2, 6.0 * morph_energy, 0.8, 0.0),
+                (3, 4.0 * morph_energy, -0.6, 1.4),
+            ], p * 0.7)
+            pat = cairo.RadialGradient(cx, cy, dyn_radius * 0.15, cx, cy, dyn_radius * r_scale)
+            pat.add_color_stop_rgba(0.0, color_glow[0], color_glow[1], color_glow[2], alpha_val)
+            pat.add_color_stop_rgba(0.40, color_glow[0], color_glow[1], color_glow[2], alpha_val * 0.6)
+            pat.add_color_stop_rgba(0.70, color_glow[0], color_glow[1], color_glow[2], alpha_val * 0.2)
+            pat.add_color_stop_rgba(1.0, color_glow[0], color_glow[1], color_glow[2], 0.0)
+            cr.set_source(pat)
+            cr.fill()
+            cr.restore()
+
+        blend_op = cairo.Operator.OVER if self.is_light else cairo.Operator.SCREEN
+
+        # -----------------------------------------------------------------
+        # 2. Layer A: Primary Morphing Fluid Body (undulating shape)
+        # -----------------------------------------------------------------
         cr.save()
-        cr.set_source_rgba(color_glow[0], color_glow[1], color_glow[2], 0.18 + 0.12 * pulse_amp)
-        cr.arc(cx, cy, dynamic_radius * 1.55, 0, 2 * math.pi)
+        cr.set_operator(blend_op)
+        off_ax = 3.5 * math.cos(p * 0.9)
+        off_ay = 3.5 * math.sin(p * 0.8)
+        self._create_organic_blob_path(cr, cx + off_ax, cy + off_ay, dyn_radius * 1.05, [
+            (2, (8.0 + 9.0 * morph_energy), 1.1, 0.0),
+            (3, (6.0 + 7.0 * morph_energy), -1.3, 2.0),
+            (4, (3.0 + 5.0 * morph_energy), 1.7, 0.8),
+        ], p)
+        pat_a = cairo.RadialGradient(cx + off_ax, cy + off_ay, 0.0, cx + off_ax, cy + off_ay, dyn_radius * 1.15)
+        pat_a.add_color_stop_rgba(0.0, color_core[0], color_core[1], color_core[2], 0.75)
+        pat_a.add_color_stop_rgba(0.35, color_core[0], color_core[1], color_core[2], 0.55)
+        pat_a.add_color_stop_rgba(0.65, color_glow[0], color_glow[1], color_glow[2], 0.25)
+        pat_a.add_color_stop_rgba(0.85, color_glow[0], color_glow[1], color_glow[2], 0.08)
+        pat_a.add_color_stop_rgba(1.0, color_glow[0], color_glow[1], color_glow[2], 0.0)
+        cr.set_source(pat_a)
         cr.fill()
         cr.restore()
 
-        # 2. Mid energy ring
+        # -----------------------------------------------------------------
+        # 3. Layer B: Counter-Rotating Secondary Fluid Body (harmonic morph)
+        # -----------------------------------------------------------------
         cr.save()
-        cr.set_source_rgba(color_glow[0], color_glow[1], color_glow[2], 0.35)
-        cr.arc(cx, cy, dynamic_radius * 1.25, 0, 2 * math.pi)
+        cr.set_operator(blend_op)
+        off_bx = -3.0 * math.sin(p * 1.1)
+        off_by = 3.0 * math.cos(p * 1.0)
+        self._create_organic_blob_path(cr, cx + off_bx, cy + off_by, dyn_radius * 0.95, [
+            (3, (7.0 + 8.0 * morph_energy), 0.9, 1.2),
+            (5, (4.0 + 6.0 * morph_energy), -1.5, 3.1),
+            (2, (5.0 + 6.0 * morph_energy), 1.2, 2.4),
+        ], p * 1.15)
+        pat_b = cairo.RadialGradient(cx + off_bx, cy + off_by, 0.0, cx + off_bx, cy + off_by, dyn_radius * 1.10)
+        pat_b.add_color_stop_rgba(0.0, color_core[0] * 1.08, color_core[1] * 1.08, color_core[2] * 1.08, 0.65)
+        pat_b.add_color_stop_rgba(0.40, color_core[0], color_core[1], color_core[2], 0.40)
+        pat_b.add_color_stop_rgba(0.70, color_glow[0], color_glow[1], color_glow[2], 0.15)
+        pat_b.add_color_stop_rgba(1.0, color_glow[0], color_glow[1], color_glow[2], 0.0)
+        cr.set_source(pat_b)
         cr.fill()
         cr.restore()
 
-        # 3. Inner dense glowing core
+        # -----------------------------------------------------------------
+        # 4. Layer C: Soft Luminous Glowing Core (diffuse blur highlight)
+        # -----------------------------------------------------------------
         cr.save()
-        cr.set_source_rgba(color_core[0], color_core[1], color_core[2], 0.92)
-        cr.arc(cx, cy, dynamic_radius, 0, 2 * math.pi)
-        cr.fill()
-        cr.restore()
-
-        # 4. Center highlight specular spot
-        cr.save()
-        cr.set_source_rgba(1.0, 1.0, 1.0, 0.40)
-        cr.arc(cx - dynamic_radius * 0.25, cy - dynamic_radius * 0.25, dynamic_radius * 0.35, 0, 2 * math.pi)
+        cr.set_operator(blend_op)
+        core_r = dyn_radius * 0.58
+        off_cx = 2.0 * math.cos(p * 1.4)
+        off_cy = 2.0 * math.sin(p * 1.3)
+        self._create_organic_blob_path(cr, cx + off_cx, cy + off_cy, core_r, [
+            (2, 3.5 * morph_energy, 1.6, 0.5),
+            (3, 2.5 * morph_energy, -1.8, 1.7),
+        ], p * 1.4)
+        pat_core = cairo.RadialGradient(cx + off_cx, cy + off_cy, 0.0, cx + off_cx, cy + off_cy, core_r * 1.25)
+        pat_core.add_color_stop_rgba(0.0, color_highlight[0], color_highlight[1], color_highlight[2], 0.85)
+        pat_core.add_color_stop_rgba(0.25, color_core[0], color_core[1], color_core[2], 0.60)
+        pat_core.add_color_stop_rgba(0.55, color_core[0], color_core[1], color_core[2], 0.28)
+        pat_core.add_color_stop_rgba(0.85, color_glow[0], color_glow[1], color_glow[2], 0.06)
+        pat_core.add_color_stop_rgba(1.0, color_glow[0], color_glow[1], color_glow[2], 0.0)
+        cr.set_source(pat_core)
         cr.fill()
         cr.restore()
 
@@ -322,3 +447,6 @@ class CallView(Gtk.Box):
         self.user_sub_label.set_visible(False)
         self.asst_sub_label.set_text("")
         self.asst_sub_label.set_visible(False)
+
+    def set_theme(self, is_light: bool):
+        self.orb.set_theme(is_light)

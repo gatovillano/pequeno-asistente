@@ -4,12 +4,25 @@ Handles persistent JSON settings in ~/.config/pequeno-asistente/config.json
 and imports existing environment/KogniTerm keys seamlessly.
 """
 import os
+import sys
 import json
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from pequeno_asistente.agent.providers import PROVIDER_ENV_VARS, PROVIDERS
 from pequeno_asistente.mcp_client.catalog import MCP_CATALOG
 from pequeno_asistente.mcp_client.registry import DEFAULT_REGISTRIES
+
+DEFAULT_MCP_SERVERS: Dict[str, Any] = {
+    "pequeno-core": {
+        "name": "Pequeño Asistente Core (Por Defecto)",
+        "command": sys.executable,
+        "args": ["-m", "pequeno_asistente.mcp_client.default_server"],
+        "env": {},
+        "transport": "stdio",
+        "disabled": False,
+        "builtin": True
+    }
+}
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "llm": {
@@ -34,35 +47,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "enabled": True
         }
     ],
-    "mcp_servers": {
-        "hypruse": {
-            "name": "Hyprland Desktop",
-            "command": "uvx",
-            "args": ["hypruse"],
-            "transport": "stdio",
-            "env": {
-                "HYPRUSE_SCREENSHOT_MODE": "image",
-                "HYPRUSE_READONLY": "0"
-            },
-            "disabled": False
-        },
-        "time": {
-            "name": "Reloj & Zonas Horarias",
-            "command": "uvx",
-            "args": ["mcp-server-time"],
-            "transport": "stdio",
-            "env": {},
-            "disabled": False
-        },
-        "fetch": {
-            "name": "Navegador Web / Fetch",
-            "command": "uvx",
-            "args": ["mcp-server-fetch"],
-            "transport": "stdio",
-            "env": {},
-            "disabled": False
-        }
-    },
+    "mcp_servers": dict(DEFAULT_MCP_SERVERS),
     "ui": {
         "window_width": 440,
         "window_height": 590,
@@ -97,6 +82,31 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "similarity_boost": 0.75,
             "fallback_to_kokoro": True
         }
+    },
+    "heartbeat": {
+        "enabled": False,
+        "interval_minutes": 30,
+        "active_hours_only": True,
+        "active_start": "08:00",
+        "active_end": "23:00",
+        "silent_if_ok": True,
+        "desktop_notification": True,
+        "show_in_chat": True,
+        "speak_tts": False,
+        "last_run": None,
+        "last_status": "idle",
+        "last_result": ""
+    },
+    "automations": [],
+    "skills": {
+        "disabled_skills": [],
+        "extra_paths": []
+    },
+    "server": {
+        "host": "0.0.0.0",
+        "port": 8770,
+        "api_key": "",
+        "cors_origins": ["*"]
     }
 }
 
@@ -123,11 +133,34 @@ class ConfigManager:
                 data = json.load(f)
             
             # Ensure top-level sections exist without overwriting user values
-            for k in ("llm", "ui", "memory", "audio", "mcp_servers", "mcp_registries"):
+            for k in ("llm", "ui", "memory", "audio", "mcp_servers", "mcp_registries", "heartbeat", "automations", "skills", "server"):
                 if k not in data:
-                    data[k] = json.loads(json.dumps(DEFAULT_CONFIG.get(k, {})))
+                    data[k] = json.loads(json.dumps(DEFAULT_CONFIG.get(k, {} if k != "automations" else [])))
+
+            # Ensure built-in default MCP server ('pequeno-core') is present in mcp_servers
+            if not isinstance(data.get("mcp_servers"), dict):
+                data["mcp_servers"] = json.loads(json.dumps(DEFAULT_MCP_SERVERS))
+            elif "pequeno-core" not in data["mcp_servers"]:
+                data["mcp_servers"]["pequeno-core"] = json.loads(json.dumps(DEFAULT_MCP_SERVERS["pequeno-core"]))
+
+            if "server" not in data:
+                data["server"] = json.loads(json.dumps(DEFAULT_CONFIG["server"]))
+            else:
+                for subk, subv in DEFAULT_CONFIG["server"].items():
+                    if subk not in data["server"]:
+                        data["server"][subk] = subv
+
+            if "skills" not in data:
+                data["skills"] = json.loads(json.dumps(DEFAULT_CONFIG["skills"]))
+            else:
+                for subk, subv in DEFAULT_CONFIG["skills"].items():
+                    if subk not in data["skills"]:
+                        data["skills"][subk] = subv
 
             # Ensure basic non-destructive defaults exist inside sections
+            for subk, subv in DEFAULT_CONFIG["heartbeat"].items():
+                if subk not in data["heartbeat"]:
+                    data["heartbeat"][subk] = subv
             for subk, subv in DEFAULT_CONFIG["ui"].items():
                 if subk not in data["ui"]:
                     data["ui"][subk] = subv
@@ -189,16 +222,10 @@ class ConfigManager:
                                 
                     # MCP Servers from KogniTerm
                     if "mcpServers" in kdata and isinstance(kdata["mcpServers"], dict):
+                        from pequeno_asistente.mcp_client.manager import normalize_mcp_server_config
                         for s_name, s_info in kdata["mcpServers"].items():
-                            if s_name not in cfg["mcp_servers"]:
-                                cfg["mcp_servers"][s_name] = {
-                                    "name": s_name,
-                                    "command": s_info.get("command", ""),
-                                    "args": s_info.get("args", []),
-                                    "env": s_info.get("env", {}),
-                                    "transport": s_info.get("transport", "stdio"),
-                                    "disabled": s_info.get("disabled", False)
-                                }
+                            if s_name not in cfg["mcp_servers"] and isinstance(s_info, dict):
+                                cfg["mcp_servers"][s_name] = normalize_mcp_server_config(s_info, fallback_name=s_name)
             except Exception:
                 pass
 
@@ -223,6 +250,23 @@ class ConfigManager:
         self._save_raw(self.data)
 
     # Accessors
+    def get_ui_config(self) -> Dict[str, Any]:
+        if "ui" not in self.data or not isinstance(self.data["ui"], dict):
+            self.data["ui"] = json.loads(json.dumps(DEFAULT_CONFIG["ui"]))
+        return self.data["ui"]
+
+    def get_theme(self) -> str:
+        theme = self.get_ui_config().get("theme", "dark")
+        if theme not in ("dark", "light", "system"):
+            return "dark"
+        return theme
+
+    def set_theme(self, theme: str):
+        if theme not in ("dark", "light", "system"):
+            theme = "dark"
+        self.get_ui_config()["theme"] = theme
+        self.save()
+
     def get_llm_config(self) -> Dict[str, Any]:
         return self.data.get("llm", {})
 
@@ -254,6 +298,18 @@ class ConfigManager:
     def get_active_model(self) -> str:
         return self.data["llm"].get("model", "openrouter/meta-llama/llama-3.3-70b-instruct")
 
+    def get_active_provider(self) -> str:
+        return self.data["llm"].get("provider", "openrouter")
+
+    def set_active_model(self, model: str):
+        self.data["llm"]["model"] = model
+        self.data["llm"]["model_user_override"] = True
+        self.save()
+
+    def set_active_provider(self, provider: str):
+        self.data["llm"]["provider"] = provider
+        self.save()
+
     def get_mcp_servers(self) -> Dict[str, Any]:
         return self.data.get("mcp_servers", {})
 
@@ -282,7 +338,8 @@ class ConfigManager:
         self.save()
 
     def set_mcp_server(self, server_id: str, server_config: Dict[str, Any]):
-        self.data["mcp_servers"][server_id] = server_config
+        from pequeno_asistente.mcp_client.manager import normalize_mcp_server_config
+        self.data["mcp_servers"][server_id] = normalize_mcp_server_config(server_config, fallback_name=server_id)
         self.save()
 
     def toggle_mcp_server(self, server_id: str, enabled: bool):
@@ -347,3 +404,83 @@ class ConfigManager:
         cfg = self.get_elevenlabs_config()
         cfg.update(updates)
         self.save()
+
+    # Heartbeat & Automations Accessors
+    def get_heartbeat_config(self) -> Dict[str, Any]:
+        if "heartbeat" not in self.data:
+            self.data["heartbeat"] = json.loads(json.dumps(DEFAULT_CONFIG["heartbeat"]))
+        return self.data["heartbeat"]
+
+    def set_heartbeat_config(self, updates: Dict[str, Any]):
+        cfg = self.get_heartbeat_config()
+        cfg.update(updates)
+        self.save()
+
+    def get_automations(self) -> List[Dict[str, Any]]:
+        if "automations" not in self.data or not isinstance(self.data["automations"], list):
+            self.data["automations"] = []
+        return self.data["automations"]
+
+    def save_automations(self, automations: List[Dict[str, Any]]):
+        self.data["automations"] = automations
+        self.save()
+
+    def add_automation(self, auto_dict: Dict[str, Any]) -> Dict[str, Any]:
+        automations = self.get_automations()
+        automations.append(auto_dict)
+        self.save()
+        return auto_dict
+
+    def update_automation(self, auto_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        automations = self.get_automations()
+        for item in automations:
+            if item.get("id") == auto_id:
+                item.update(updates)
+                self.save()
+                return item
+        return None
+
+    def delete_automation(self, auto_id: str) -> bool:
+        automations = self.get_automations()
+        before = len(automations)
+        self.data["automations"] = [a for a in automations if a.get("id") != auto_id]
+        if len(self.data["automations"]) != before:
+            self.save()
+            return True
+        return False
+
+    def get_skills_config(self) -> Dict[str, Any]:
+        if "skills" not in self.data or not isinstance(self.data["skills"], dict):
+            self.data["skills"] = {"disabled_skills": [], "extra_paths": []}
+        return self.data["skills"]
+
+    def get_disabled_skills(self) -> List[str]:
+        return list(self.get_skills_config().get("disabled_skills", []))
+
+    def set_skill_disabled(self, skill_id: str, disabled: bool):
+        cfg = self.get_skills_config()
+        disabled_set = set(cfg.get("disabled_skills", []))
+        if disabled:
+            disabled_set.add(skill_id)
+        else:
+            disabled_set.discard(skill_id)
+        cfg["disabled_skills"] = sorted(list(disabled_set))
+        self.save()
+
+    def get_server_config(self) -> Dict[str, Any]:
+        server_cfg = self.data.get("server")
+        if not isinstance(server_cfg, dict):
+            server_cfg = dict(DEFAULT_CONFIG["server"])
+            self.data["server"] = server_cfg
+        return server_cfg
+
+    def set_server_config(self, host: Optional[str] = None, port: Optional[int] = None, api_key: Optional[str] = None):
+        cfg = self.get_server_config()
+        if host is not None:
+            cfg["host"] = host
+        if port is not None:
+            cfg["port"] = int(port)
+        if api_key is not None:
+            cfg["api_key"] = api_key
+        self.save()
+

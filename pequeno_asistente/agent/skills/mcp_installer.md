@@ -21,8 +21,9 @@ Cuando el usuario te entregue un enlace de GitHub (ej: `https://github.com/upsta
    - **Python**: Si contiene `pyproject.toml`, `setup.py` o `requirements.txt`.
      - Si está publicado en PyPI: usar `uvx <nombre-paquete>`
      - Si requiere entorno local: crear un venv con `uv venv` o `python3 -m venv`, instalar con `uv pip install -e .`, y usar el binario en `.venv/bin/<ejecutable>`.
-   - **Remoto / HTTP (SSE)**: Si es una URL HTTP (ej: `https://server.smithery.ai/...` o endpoint SSE).
-     - El transporte es `"transport": "sse"` y el comando/url es la URL del endpoint.
+   - **Remoto / HTTP (Streamable HTTP o SSE)**: Si es una URL HTTP/HTTPS (ej: `https://server.smithery.ai/...`, `https://.../mcp` o `https://.../sse`).
+     - Soporta `"transport": "auto"` (auto-detecta entre Streamable HTTP y SSE con respaldo automático), `"transport": "streamable_http"` o `"transport": "sse"`.
+     - La dirección se especifica en `"url": "https://..."` y las credenciales en `"api_key"` (inyecta `Authorization: Bearer ...`) o en `"headers": {"Authorization": "Bearer ..."}`.
    - **Docker**: Si se distribuye como contenedor: `docker run -i --rm ...`.
 
 ---
@@ -30,7 +31,8 @@ Cuando el usuario te entregue un enlace de GitHub (ej: `https://github.com/upsta
 ## 2. Detección de Variables de Entorno y Credenciales
 Revisar si el servidor requiere claves de API, tokens o parámetros de conexión:
 - Por ejemplo: tokens de GitHub (`GITHUB_PERSONAL_ACCESS_TOKEN`), claves de búsqueda (`BRAVE_API_KEY`, `TAVILY_API_KEY`), o cadenas de conexión a bases de datos.
-- Estas deben registrarse en el bloque `"env": { "VARIABLE": "VALOR" }`. Si la clave es desconocida o privada del usuario, indícale claramente qué clave debe introducir.
+- Para servidores locales (`stdio`), estas se registran en `"env": { "VARIABLE": "VALOR" }`.
+- Para servidores remotos (`streamable_http` / `sse` / `auto`), pueden registrarse en `"api_key": "..."` o en `"headers": { "Authorization": "Bearer ${MI_TOKEN}" }` (soportando interpolación `${VAR}` desde `env`).
 
 ---
 
@@ -38,7 +40,7 @@ Revisar si el servidor requiere claves de API, tokens o parámetros de conexión
 El cliente Pequeño Asistente gestiona sus servidores en el archivo:
 `~/.config/pequeno-asistente/config.json`
 
-Estructura requerida dentro del objeto `"mcp_servers"`:
+Estructura para servidor **Local (`stdio`)** dentro de `"mcp_servers"`:
 ```json
 {
   "mcp_servers": {
@@ -56,6 +58,25 @@ Estructura requerida dentro del objeto `"mcp_servers"`:
 }
 ```
 
+Estructura para servidor **Remoto (`streamable_http` / `sse` / `auto`)** dentro de `"mcp_servers"`:
+```json
+{
+  "mcp_servers": {
+    "<id_remoto>": {
+      "name": "<Nombre Amigable Remoto>",
+      "url": "https://ejemplo.com/mcp",
+      "transport": "auto",
+      "api_key": "<token_bearer_opcional>",
+      "headers": {
+        "X-Custom-Header": "valor"
+      },
+      "env": {},
+      "disabled": false
+    }
+  }
+}
+```
+
 ### Opciones de Instalación:
 - **Si posees herramientas de sistema (ej: `filesystem` o `desktop-bash`)**:
   1. Puedes leer `~/.config/pequeno-asistente/config.json`.
@@ -63,7 +84,7 @@ Estructura requerida dentro del objeto `"mcp_servers"`:
   3. Guardar el archivo.
   4. Si requiere clonación o instalación de dependencias, puedes ejecutar los comandos correspondientes (`git clone`, `npm install`, etc.).
 - **Si el usuario prefiere hacerlo manualmente**:
-  - Proporciónale el bloque JSON exacto listo para copiar y pegar en la interfaz de **Configuración ➔ Catálogo MCP ➔ + Añadir Servidor Local ➔ Pestaña Pegar JSON Completo**.
+  - Proporciónale el bloque JSON exacto listo para copiar y pegar en la interfaz de **Configuración ➔ Catálogo MCP ➔ + Añadir Servidor MCP ➔ Pestaña Pegar JSON Completo**.
 
 ---
 

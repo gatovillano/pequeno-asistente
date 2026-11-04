@@ -92,6 +92,10 @@ class CallEngine:
             self.is_active = False
             self._stop_event.set()
 
+        # Abort any active agent turn so it doesn't stay running in background
+        if hasattr(self.agent, "is_running") and self.agent.is_running:
+            self.agent.abort()
+
         # Stop recorder process
         if self._record_proc:
             try:
@@ -123,6 +127,8 @@ class CallEngine:
     def interrupt_assistant(self):
         """Interrupts assistant speech immediately."""
         self.tts.stop()
+        if hasattr(self.agent, "is_running") and self.agent.is_running:
+            self.agent.abort()
         if self.state in ("assistant_speaking", "thinking"):
             self._set_state("listening", "Escuchando...")
 
@@ -133,7 +139,7 @@ class CallEngine:
     def _find_stream_recorder(self) -> Optional[List[str]]:
         """Detects CLI command for streaming raw 16kHz s16le PCM to stdout."""
         if shutil.which("pw-record"):
-            return ["pw-record", "--rate", "16000", "--channels", "1", "--format", "s16", "-"]
+            return ["pw-record", "--raw", "--rate", "16000", "--channels", "1", "--format", "s16", "-"]
         if shutil.which("ffmpeg"):
             return ["ffmpeg", "-loglevel", "error", "-f", "pulse", "-i", "default", "-ar", "16000", "-ac", "1", "-f", "s16le", "-"]
         if shutil.which("arecord"):
@@ -289,6 +295,7 @@ class CallEngine:
     def _stream_agent_and_speak(self, user_text: str):
         """Queries the LLM and plays speech with Unified TTS."""
         assistant_full_text = []
+        error_messages = []
 
         def on_token(token: str):
             if self._stop_event.is_set():
@@ -296,24 +303,53 @@ class CallEngine:
             assistant_full_text.append(token)
             self.on_assistant_token(token)
 
+        def on_error(err: str):
+            error_messages.append(err)
+            logger.error(f"Agent turn error in call: {err}")
+
         callbacks = AgentCallbacks(
             on_token=on_token,
             on_complete=lambda _final: logger.info("Call turn LLM stream finished."),
-            on_error=lambda err: logger.error(f"Agent turn error in call: {err}")
+            on_error=on_error
         )
 
-        # Run agent turn on the background asyncio loop
+        # Ensure agent is not already running a prior stuck turn
+        if hasattr(self.agent, "is_running") and self.agent.is_running:
+            logger.warning("Agent was already running prior to starting call turn. Aborting previous turn.")
+            self.agent.abort()
+            time.sleep(0.15)
+
+        # Run agent turn on the background asyncio loop with is_call_mode=True
         future = asyncio.run_coroutine_threadsafe(
-            self.agent.run_turn(user_text, callbacks),
+            self.agent.run_turn(user_text, callbacks, is_call_mode=True),
             self.async_loop
         )
 
+        timed_out = False
         try:
-            future.result(timeout=25.0)
+            future.result(timeout=35.0)
         except Exception as e:
-            logger.error(f"Error waiting for agent response in call: {e}")
+            timed_out = True
+            logger.error(f"Error or timeout waiting for agent response in call: {e}")
+            # Guarantee the agent aborts and does not block subsequent voice interactions
+            if hasattr(self.agent, "abort"):
+                self.agent.abort()
+            try:
+                future.result(timeout=1.0)
+            except Exception:
+                pass
 
         full_reply = "".join(assistant_full_text).strip()
+
+        # If turn produced no text due to timeout or error, generate verbal feedback
+        if not full_reply and not self._stop_event.is_set():
+            if timed_out:
+                full_reply = "Disculpa, la respuesta tardó demasiado tiempo en procesarse. ¿Podrías indicármelo de nuevo?"
+            elif error_messages:
+                clean_err = error_messages[-1].replace("Operación cancelada por el usuario.", "").strip()
+                if clean_err and "ya está procesando una consulta" not in clean_err:
+                    full_reply = f"Hubo un inconveniente con el modelo: {clean_err}"
+
         if not full_reply or self._stop_event.is_set():
             if not self._stop_event.is_set():
                 self._set_state("listening", "Escuchando...")
@@ -340,8 +376,8 @@ class CallEngine:
         # Post turn callback to save message to chat view & thread
         self.on_turn_finished(user_text, full_reply)
 
-        # Brief cooldown period (0.4s) to avoid speaker audio reverberation into mic
-        time.sleep(0.4)
+        # Brief cooldown period (0.3s) to avoid speaker audio reverberation into mic
+        time.sleep(0.3)
 
         if not self._stop_event.is_set() and self.state != "user_speaking":
             self._set_state("listening", "Escuchando...")

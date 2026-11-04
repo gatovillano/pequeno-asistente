@@ -1,103 +1,212 @@
-/* Modern & Compact Dark Theme for Pequeño Asistente */
+/* ==========================================================================
+   Pequeño Asistente - Minimalist, Curvy & Borderless Dark Theme
+   Smooth rounded forms, seamless surfaces, zero boxy borders, original colors
+   ========================================================================== */
 
+/* --- 1. Global Window & Foundations --- */
 window.asistente-window {
     background-color: #12121c;
-    border-radius: 16px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 22px;
+    border: none;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
 }
 
-/* Header Bar */
+window.asistente-window:backdrop {
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+}
+
+/* Base text selection */
+window.asistente-window label selection,
+window.asistente-window textview text selection {
+    background-color: rgba(137, 180, 250, 0.3);
+    color: #ffffff;
+}
+
+/* --- 2. Header Bar --- */
 .asistente-header {
     background-color: #171724;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-    padding: 2px 6px;
-    min-height: 38px;
+    border-bottom: none;
+    padding: 4px 10px;
+    min-height: 42px;
 }
 
 .header-title {
-    font-size: 12.5px;
+    font-size: 13px;
     font-weight: 600;
     color: #cdd6f4;
 }
 
 .header-icon-btn {
-    border-radius: 7px;
-    padding: 3px;
-    min-width: 26px;
-    min-height: 26px;
+    border-radius: 50%;
+    padding: 4px;
+    min-width: 30px;
+    min-height: 30px;
     color: #a6adc8;
+    background: transparent;
+    border: none;
+    transition: all 180ms ease;
 }
 
 .header-icon-btn:hover {
-    background-color: rgba(255, 255, 255, 0.06);
+    background-color: rgba(255, 255, 255, 0.08);
     color: #cdd6f4;
 }
 
 .model-pill {
-    background-color: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.07);
-    border-radius: 8px;
-    padding: 0px 6px;
+    background-color: rgba(255, 255, 255, 0.05);
+    border: none;
+    border-radius: 20px;
+    padding: 2px 9px;
     font-size: 9.5px;
+    font-weight: 500;
     color: #9399b2;
+    transition: all 150ms ease;
+}
+
+.model-pill:hover {
+    background-color: rgba(255, 255, 255, 0.09);
+    color: #cdd6f4;
 }
 
 .status-pill {
-    background-color: rgba(34, 197, 94, 0.12);
+    background-color: rgba(34, 197, 94, 0.14);
     color: #4ade80;
-    border: 1px solid rgba(74, 222, 128, 0.22);
-    border-radius: 9px;
-    padding: 1px 7px;
+    border: none;
+    border-radius: 20px;
+    padding: 2px 9px;
+    font-size: 9.5px;
+    font-weight: 600;
+}
+
+.status-pill-connected {
+    background-color: rgba(34, 197, 94, 0.16);
+    color: #4ade80;
+    border: none;
+    border-radius: 20px;
+    padding: 3px 10px;
     font-size: 10px;
     font-weight: 600;
 }
 
-/* Empty State / Welcome Card */
+.status-pill-connecting {
+    background-color: rgba(234, 179, 8, 0.16);
+    color: #facc15;
+    border: none;
+    border-radius: 20px;
+    padding: 3px 10px;
+    font-size: 10px;
+    font-weight: 600;
+}
+
+.status-pill-error {
+    background-color: rgba(239, 68, 68, 0.16);
+    color: #f87171;
+    border: none;
+    border-radius: 20px;
+    padding: 3px 10px;
+    font-size: 10px;
+    font-weight: 600;
+}
+
+.status-pill-disconnected {
+    background-color: rgba(255, 255, 255, 0.08);
+    color: #9399b2;
+    border: none;
+    border-radius: 20px;
+    padding: 3px 10px;
+    font-size: 10px;
+    font-weight: 600;
+}
+
+/* Header Action Buttons (Call & Terminal) */
+.header-call-btn {
+    border-radius: 20px;
+    padding: 3px 8px;
+    min-width: 30px;
+    min-height: 30px;
+    color: #38bdf8;
+    background-color: rgba(56, 189, 248, 0.12);
+    border: none;
+    transition: all 180ms ease;
+}
+
+.header-call-btn:hover {
+    background-color: rgba(56, 189, 248, 0.22);
+    color: #7dd3fc;
+}
+
+.header-terminal-btn {
+    border-radius: 20px;
+    padding: 3px 8px;
+    min-width: 30px;
+    min-height: 30px;
+    color: #a6e3a1;
+    background-color: rgba(166, 227, 161, 0.12);
+    border: none;
+    transition: all 180ms ease;
+}
+
+.header-terminal-btn:hover {
+    background-color: rgba(166, 227, 161, 0.22);
+    color: #bbf7d0;
+}
+
+.terminal-btn-active {
+    background-color: rgba(166, 227, 161, 0.3);
+    color: #ffffff;
+}
+
+/* --- 3. Welcome / Empty State --- */
 .welcome-card {
-    padding: 12px 10px;
+    padding: 20px 16px;
 }
 
 .welcome-avatar-box {
-    background: radial-gradient(circle, rgba(99, 102, 241, 0.22) 0%, rgba(59, 130, 246, 0.05) 70%, transparent 100%);
-    border: 1px solid rgba(137, 180, 250, 0.2);
-    border-radius: 20px;
-    padding: 6px;
-    margin-bottom: 2px;
+    background: radial-gradient(circle, rgba(137, 180, 250, 0.16) 0%, rgba(99, 102, 241, 0.04) 65%, transparent 100%);
+    border: none;
+    border-radius: 50%;
+    padding: 12px;
+    margin-bottom: 8px;
+}
+
+.welcome-avatar-icon {
+    color: #89b4fa;
 }
 
 .welcome-avatar {
-    font-size: 26px;
+    font-size: 28px;
 }
 
 .welcome-title {
-    font-size: 14.5px;
+    font-size: 15.5px;
     font-weight: bold;
     color: #cdd6f4;
 }
 
 .welcome-subtitle {
-    font-size: 11px;
+    font-size: 11.5px;
     color: #6c7086;
-    margin-bottom: 6px;
+    margin-bottom: 10px;
+    line-height: 1.45;
 }
 
 .welcome-suggestions {
-    margin-top: 4px;
+    margin-top: 6px;
 }
 
 .suggestion-chip {
-    background-color: #181827;
-    border: 1px solid rgba(255, 255, 255, 0.065);
-    border-radius: 9px;
-    padding: 5px 9px;
+    background-color: rgba(255, 255, 255, 0.04);
+    border: none;
+    border-radius: 20px;
+    padding: 8px 14px;
     color: #cdd6f4;
-    font-size: 11px;
-    margin: 2px 0;
+    font-size: 11.5px;
+    margin: 3px 0;
+    transition: all 180ms ease;
 }
 
 .suggestion-chip:hover {
-    background-color: #212136;
-    border-color: rgba(137, 180, 250, 0.3);
+    background-color: rgba(137, 180, 250, 0.12);
     color: #89b4fa;
 }
 
@@ -106,29 +215,50 @@ window.asistente-window {
     font-size: 12px;
 }
 
-/* Chat View */
-.message-bubble {
-    margin: 6px 0;
+.suggestion-chip:hover .suggestion-arrow {
+    color: #89b4fa;
 }
 
-/* User Bubble: sleek capsule aligned to the right */
+/* --- 4. Chat View & Messages --- */
+.message-bubble {
+    margin: 4px 0;
+}
+
+/* User Bubble: Super curved, pill-like capsule, borderless */
 .user-bubble {
     background-color: #2b2d42;
     color: #f1f5f9;
-    border-radius: 18px 18px 4px 18px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    padding: 9px 14px;
+    border-radius: 22px 22px 6px 22px;
+    border: none;
+    padding: 10px 16px;
     margin-left: 64px;
     margin-bottom: 8px;
     font-size: 13px;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.22);
+    line-height: 1.55;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.22);
 }
 
 .user-bubble .message-text {
     color: #f1f5f9;
 }
 
-/* Assistant Message: NO bubble, flat centered reading text layout (ChatGPT / Claude / Gemini style) */
+.user-bubble-queued {
+    opacity: 0.85;
+    background-color: #24263a;
+    border: 1px dashed rgba(255, 255, 255, 0.22);
+}
+
+.queue-badge {
+    font-size: 10px;
+    font-weight: 600;
+    color: #94a3b8;
+    background-color: rgba(0, 0, 0, 0.25);
+    border-radius: 8px;
+    padding: 2px 6px;
+    margin-top: 2px;
+}
+
+/* Assistant Message: Open, seamless reading layout with zero boxes */
 .assistant-bubble,
 .assistant-message {
     background: transparent;
@@ -136,7 +266,7 @@ window.asistente-window {
     border: none;
     border-radius: 0;
     box-shadow: none;
-    padding: 6px 2px 14px 2px;
+    padding: 4px 2px 14px 2px;
     margin: 4px 0 12px 0;
     font-size: 13.5px;
     color: #cdd6f4;
@@ -144,17 +274,16 @@ window.asistente-window {
 
 .message-text {
     font-size: 13px;
-    line-height: 1.55;
+    line-height: 1.62;
     color: #cdd6f4;
 }
 
 .assistant-header {
     margin-bottom: 6px;
-    opacity: 0.9;
 }
 
 .assistant-bot-icon {
-    font-size: 12px;
+    font-size: 12.5px;
     color: #89b4fa;
 }
 
@@ -170,7 +299,7 @@ window.asistente-window {
     margin-top: 8px;
     padding-top: 2px;
     opacity: 0.65;
-    transition: opacity 150ms ease-in-out;
+    transition: opacity 180ms ease;
 }
 
 .assistant-actions-bar:hover {
@@ -178,13 +307,14 @@ window.asistente-window {
 }
 
 .assistant-action-btn {
-    border-radius: 6px;
-    padding: 3px 6px;
+    border-radius: 50%;
+    padding: 4px;
     min-width: 26px;
     min-height: 26px;
     color: #a6adc8;
     background-color: transparent;
     border: none;
+    transition: all 150ms ease;
 }
 
 .assistant-action-btn:hover {
@@ -193,12 +323,14 @@ window.asistente-window {
 }
 
 .bubble-copy-btn {
-    opacity: 0.5;
+    opacity: 0.55;
     padding: 2px 5px;
     min-width: 22px;
     min-height: 22px;
-    border-radius: 5px;
+    border-radius: 20px;
     color: #a6adc8;
+    border: none;
+    transition: all 150ms ease;
 }
 
 .bubble-copy-btn:hover {
@@ -207,13 +339,88 @@ window.asistente-window {
     background-color: rgba(255, 255, 255, 0.08);
 }
 
-/* Tool execution card */
+/* --- 5. LLM Thinking Card (Borderless, Soft Curved Pill) --- */
+.thinking-card {
+    background-color: rgba(203, 166, 247, 0.07);
+    border: none;
+    border-radius: 18px;
+    padding: 4px 12px;
+    margin: 4px 0 8px 0;
+    transition: all 180ms ease;
+}
+
+.thinking-card:hover {
+    background-color: rgba(203, 166, 247, 0.12);
+}
+
+.thinking-header {
+    min-height: 26px;
+}
+
+.thinking-icon {
+    font-size: 12px;
+    color: #cba6f7;
+}
+
+.thinking-title {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: #cba6f7;
+    letter-spacing: 0.2px;
+}
+
+.thinking-badge-active {
+    font-size: 9.5px;
+    color: #cba6f7;
+    background-color: rgba(203, 166, 247, 0.15);
+    border: none;
+    padding: 2px 8px;
+    border-radius: 20px;
+}
+
+.thinking-badge-done {
+    font-size: 10px;
+    color: #7f849c;
+    font-style: italic;
+}
+
+.thinking-toggle-btn {
+    border-radius: 50%;
+    padding: 2px 4px;
+    min-width: 22px;
+    min-height: 22px;
+    color: #9399b2;
+    border: none;
+    transition: all 150ms ease;
+}
+
+.thinking-toggle-btn:hover {
+    color: #cba6f7;
+    background-color: rgba(203, 166, 247, 0.14);
+}
+
+.thinking-details {
+    margin-top: 6px;
+    padding: 6px 10px;
+    border: none;
+    border-left: 2px solid rgba(203, 166, 247, 0.35);
+}
+
+.thinking-text {
+    font-size: 11.5px;
+    line-height: 1.55;
+    color: #bac2de;
+    font-style: italic;
+    padding: 2px 4px;
+}
+
+/* --- 6. Tool Execution Card (Borderless, Soft Capsule) --- */
 .tool-card {
-    background-color: #151522;
-    border-radius: 8px;
-    border: 1px solid rgba(137, 180, 250, 0.18);
-    padding: 4px 8px;
-    margin: 2px 6px;
+    background-color: rgba(255, 255, 255, 0.035);
+    border: none;
+    border-radius: 18px;
+    padding: 5px 12px;
+    margin: 4px 0 6px 0;
 }
 
 .tool-title {
@@ -225,25 +432,28 @@ window.asistente-window {
 .tool-badge-running {
     font-size: 9px;
     color: #89b4fa;
-    background-color: rgba(137, 180, 250, 0.12);
-    padding: 1px 5px;
-    border-radius: 5px;
+    background-color: rgba(137, 180, 250, 0.14);
+    border: none;
+    padding: 2px 7px;
+    border-radius: 20px;
 }
 
 .tool-badge-success {
     font-size: 9px;
     color: #a6e3a1;
-    background-color: rgba(166, 227, 161, 0.12);
-    padding: 1px 5px;
-    border-radius: 5px;
+    background-color: rgba(166, 227, 161, 0.14);
+    border: none;
+    padding: 2px 7px;
+    border-radius: 20px;
 }
 
 .tool-badge-error {
     font-size: 9px;
     color: #f38ba8;
-    background-color: rgba(243, 139, 168, 0.12);
-    padding: 1px 5px;
-    border-radius: 5px;
+    background-color: rgba(243, 139, 168, 0.14);
+    border: none;
+    padding: 2px 7px;
+    border-radius: 20px;
 }
 
 .tool-icon-success {
@@ -259,44 +469,172 @@ window.asistente-window {
 }
 
 .tool-toggle-btn {
-    padding: 1px 3px;
-    min-width: 18px;
-    min-height: 18px;
-    border-radius: 4px;
+    padding: 2px;
+    min-width: 20px;
+    min-height: 20px;
+    border-radius: 50%;
     color: #6c7086;
+    border: none;
+    transition: all 150ms ease;
 }
 
 .tool-toggle-btn:hover {
     color: #cdd6f4;
-    background-color: rgba(255, 255, 255, 0.06);
+    background-color: rgba(255, 255, 255, 0.08);
 }
 
 .tool-details {
-    background-color: #0e0e16;
-    border-radius: 6px;
-    padding: 5px 7px;
-    margin-top: 3px;
-    font-size: 10px;
+    background-color: rgba(0, 0, 0, 0.22);
+    border: none;
+    border-radius: 14px;
+    padding: 6px 10px;
+    margin-top: 4px;
+    font-size: 10.5px;
     color: #a6adc8;
 }
 
-/* Input area */
+/* --- 7. Code Card & Blocks --- */
+.code-card {
+    background-color: #0e0e16;
+    border: none;
+    border-radius: 16px;
+    margin: 6px 0;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.code-header {
+    background-color: rgba(255, 255, 255, 0.035);
+    border-bottom: none;
+    border-top-left-radius: 16px;
+    border-top-right-radius: 16px;
+    padding: 4px 10px;
+}
+
+.code-lang-label {
+    font-size: 9px;
+    font-weight: bold;
+    color: #89b4fa;
+    letter-spacing: 0.5px;
+}
+
+.code-copy-btn {
+    font-size: 9px;
+    padding: 2px 8px;
+    border-radius: 20px;
+    color: #cdd6f4;
+    border: none;
+    transition: all 150ms ease;
+}
+
+.code-copy-btn:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+    color: #89b4fa;
+}
+
+.code-body {
+    padding: 8px 10px;
+    font-family: 'JetBrains Mono', 'Fira Code', 'DejaVu Sans Mono', monospace;
+    font-size: 10.5px;
+    line-height: 1.5;
+    color: #a6e3a1;
+    background-color: #0e0e16;
+    border-bottom-left-radius: 16px;
+    border-bottom-right-radius: 16px;
+}
+
+/* --- 8. Markdown Table Card & Cells --- */
+.table-card {
+    background-color: #0e0e16;
+    border: none;
+    border-radius: 16px;
+    margin: 8px 0;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.table-header-bar {
+    background-color: rgba(255, 255, 255, 0.035);
+    border-bottom: none;
+    padding: 5px 10px;
+    border-top-left-radius: 16px;
+    border-top-right-radius: 16px;
+}
+
+.table-badge-label {
+    font-size: 9.5px;
+    font-weight: bold;
+    color: #89b4fa;
+    letter-spacing: 0.5px;
+}
+
+.table-scroll {
+    background-color: transparent;
+    border-bottom-left-radius: 16px;
+    border-bottom-right-radius: 16px;
+}
+
+.markdown-table-grid {
+    background-color: transparent;
+    border-bottom-left-radius: 16px;
+    border-bottom-right-radius: 16px;
+}
+
+.table-cell {
+    padding: 7px 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+    font-size: 11px;
+    color: #cdd6f4;
+}
+
+.table-cell-divider {
+    border-right: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.table-cell-last-row {
+    border-bottom: none;
+}
+
+.table-cell-bottom-left {
+    border-bottom-left-radius: 16px;
+}
+
+.table-cell-bottom-right {
+    border-bottom-right-radius: 16px;
+}
+
+.table-header-cell {
+    background-color: rgba(255, 255, 255, 0.04);
+    border-bottom: none;
+    font-weight: bold;
+    color: #b4befe;
+}
+
+.table-row-odd {
+    background-color: rgba(255, 255, 255, 0.012);
+}
+
+.table-row-even {
+    background-color: rgba(255, 255, 255, 0.028);
+}
+
+/* --- 9. Input Area (Curvy Floating Capsule, Borderless) --- */
 .input-container {
-    background-color: #161623;
-    border-top: 1px solid rgba(255, 255, 255, 0.06);
-    padding: 6px 10px 4px 10px;
+    background: transparent;
+    border-top: none;
+    padding: 6px 12px 10px 12px;
 }
 
 .input-card {
-    background-color: #101018;
-    border-radius: 12px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    padding: 3px 4px 3px 8px;
+    background-color: #191929;
+    border-radius: 24px;
+    border: none;
+    padding: 4px 6px 4px 14px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+    transition: all 200ms ease;
 }
 
 .input-card:focus-within {
-    border-color: #3b82f6;
-    box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.25);
+    background-color: #1e1e32;
+    box-shadow: 0 0 0 2px rgba(137, 180, 250, 0.28), 0 6px 24px rgba(0, 0, 0, 0.45);
 }
 
 .chat-input-scrolled {
@@ -307,16 +645,18 @@ window.asistente-window {
     background: transparent;
     color: #cdd6f4;
     font-size: 12.5px;
+    line-height: 1.45;
 }
 
 .mic-button {
-    border-radius: 8px;
+    border-radius: 50%;
     background-color: rgba(255, 255, 255, 0.06);
     color: #a6adc8;
-    min-width: 28px;
-    min-height: 28px;
-    padding: 3px;
-    transition: all 200ms ease;
+    min-width: 30px;
+    min-height: 30px;
+    padding: 4px;
+    transition: all 180ms ease;
+    border: none;
 }
 
 .mic-button:hover {
@@ -335,33 +675,38 @@ window.asistente-window {
 }
 
 .send-button {
-    border-radius: 8px;
+    border-radius: 50%;
     background-color: #3b82f6;
     color: #ffffff;
     font-weight: bold;
-    min-width: 28px;
-    min-height: 28px;
-    padding: 3px;
+    min-width: 30px;
+    min-height: 30px;
+    padding: 4px;
+    border: none;
+    transition: all 180ms ease;
 }
 
 .send-button:hover {
     background-color: #2563eb;
+    transform: scale(1.05);
 }
 
 .stop-button {
-    border-radius: 8px;
+    border-radius: 50%;
     background-color: #f38ba8;
     color: #11111b;
     font-weight: bold;
-    min-width: 28px;
-    min-height: 28px;
-    padding: 3px;
+    min-width: 30px;
+    min-height: 30px;
+    padding: 4px;
+    border: none;
+    transition: all 180ms ease;
 }
 
 .input-hint {
     color: #6c7086;
     font-size: 9.5px;
-    margin-top: 2px;
+    margin-top: 4px;
     margin-bottom: 2px;
 }
 
@@ -375,126 +720,23 @@ window.asistente-window {
 .error-notice {
     color: #f38ba8;
     background-color: rgba(243, 139, 168, 0.1);
-    border-radius: 7px;
-    padding: 5px 8px;
-    font-size: 11px;
-    margin: 4px 0;
-}
-
-/* Code Card & Blocks */
-.code-card {
-    background-color: #101018;
-    border: 1px solid rgba(255, 255, 255, 0.075);
-    border-radius: 8px;
-    margin: 4px 0;
-}
-
-.code-header {
-    background-color: #161623;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-    padding: 2px 7px;
-}
-
-.code-lang-label {
-    font-size: 9px;
-    font-weight: bold;
-    color: #89b4fa;
-    letter-spacing: 0.5px;
-}
-
-.code-copy-btn {
-    font-size: 9px;
-    padding: 1px 5px;
-    border-radius: 4px;
-    color: #cdd6f4;
-}
-
-.code-copy-btn:hover {
-    background-color: rgba(255, 255, 255, 0.08);
-    color: #89b4fa;
-}
-
-.code-body {
-    padding: 6px 8px;
-    font-family: 'JetBrains Mono', 'Fira Code', 'DejaVu Sans Mono', monospace;
-    font-size: 10.5px;
-    color: #a6e3a1;
-    background-color: #101018;
-}
-
-/* Markdown Table Card & Cells */
-.table-card {
-    background-color: #101018;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 8px;
-    margin: 6px 0;
-}
-
-.table-header-bar {
-    background-color: #161623;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-    padding: 3px 8px;
-    border-top-left-radius: 8px;
-    border-top-right-radius: 8px;
-}
-
-.table-badge-label {
-    font-size: 9.5px;
-    font-weight: bold;
-    color: #89b4fa;
-    letter-spacing: 0.5px;
-}
-
-.table-scroll {
-    background-color: transparent;
-    border-bottom-left-radius: 8px;
-    border-bottom-right-radius: 8px;
-}
-
-.markdown-table-grid {
-    background-color: transparent;
-}
-
-.table-cell {
+    border: none;
+    border-radius: 16px;
     padding: 6px 12px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
     font-size: 11px;
-    color: #cdd6f4;
+    margin: 4px 0;
 }
 
-.table-cell-divider {
-    border-right: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.table-cell-last-row {
-    border-bottom: none;
-}
-
-.table-header-cell {
-    background-color: rgba(255, 255, 255, 0.045);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
-    font-weight: bold;
-    color: #b4befe;
-}
-
-.table-row-odd {
-    background-color: rgba(255, 255, 255, 0.012);
-}
-
-.table-row-even {
-    background-color: rgba(255, 255, 255, 0.028);
-}
-
-/* Conversation Threads Sidebar */
+/* --- 10. Conversation Threads Sidebar --- */
 .thread-sidebar {
-    background-color: #151522;
-    border-right: 1px solid rgba(255, 255, 255, 0.07);
-    padding: 8px;
+    background-color: #101018;
+    border-right: none;
+    padding: 10px;
 }
 
 .thread-sidebar-header {
-    padding: 2px 4px;
-    margin-bottom: 4px;
+    padding: 2px 6px;
+    margin-bottom: 6px;
 }
 
 .thread-sidebar-title {
@@ -504,23 +746,32 @@ window.asistente-window {
 }
 
 .sidebar-close-btn {
-    padding: 2px 4px;
-    min-width: 22px;
-    min-height: 22px;
-    border-radius: 5px;
+    padding: 3px;
+    min-width: 24px;
+    min-height: 24px;
+    border-radius: 50%;
+    color: #a6adc8;
+    border: none;
+    transition: all 150ms ease;
+}
+
+.sidebar-close-btn:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+    color: #cdd6f4;
 }
 
 .new-thread-btn {
-    background-color: rgba(59, 130, 246, 0.12);
-    border: 1px solid rgba(59, 130, 246, 0.25);
-    border-radius: 8px;
-    padding: 5px 8px;
-    margin-bottom: 6px;
+    background-color: rgba(59, 130, 246, 0.14);
+    border: none;
+    border-radius: 20px;
+    padding: 7px 12px;
+    margin-bottom: 8px;
     color: #89b4fa;
+    transition: all 180ms ease;
 }
 
 .new-thread-btn:hover {
-    background-color: rgba(59, 130, 246, 0.22);
+    background-color: rgba(59, 130, 246, 0.24);
     color: #b4befe;
 }
 
@@ -535,18 +786,21 @@ window.asistente-window {
 
 .thread-row {
     background-color: transparent;
-    border-radius: 7px;
-    margin: 1px 0;
-    padding: 2px 4px;
+    border-radius: 14px;
+    border: none;
+    margin: 2px 0;
+    padding: 3px 6px;
+    transition: background-color 150ms ease;
 }
 
 .thread-row:hover {
-    background-color: rgba(255, 255, 255, 0.04);
+    background-color: rgba(255, 255, 255, 0.045);
 }
 
 .thread-row-active {
-    background-color: rgba(59, 130, 246, 0.12);
-    border-left: 3px solid #3b82f6;
+    background-color: rgba(59, 130, 246, 0.15);
+    border-radius: 14px;
+    border: none;
 }
 
 .thread-select-btn {
@@ -565,12 +819,46 @@ window.asistente-window {
     color: #6c7086;
 }
 
+.thread-row-running {
+    background-color: rgba(137, 180, 250, 0.12);
+    border-left: 2px solid #89b4fa;
+}
+
+.thread-item-running-date {
+    font-size: 9.5px;
+    font-weight: 600;
+    color: #89b4fa;
+}
+
+.thread-spinner {
+    min-width: 12px;
+    min-height: 12px;
+}
+
+.running-sessions-pill {
+    background-color: rgba(137, 180, 250, 0.16);
+    color: #89b4fa;
+    border-radius: 20px;
+    padding: 2px 9px;
+    font-size: 9.5px;
+    font-weight: 600;
+    transition: all 180ms ease;
+}
+
+.running-sessions-pill:hover {
+    background-color: rgba(137, 180, 250, 0.28);
+    color: #cdd6f4;
+}
+
 .thread-del-btn {
-    opacity: 0.5;
-    padding: 2px;
-    border-radius: 5px;
-    min-width: 20px;
-    min-height: 20px;
+    opacity: 0.45;
+    padding: 3px;
+    border-radius: 50%;
+    min-width: 22px;
+    min-height: 22px;
+    color: #a6adc8;
+    border: none;
+    transition: all 150ms ease;
 }
 
 .thread-del-btn:hover {
@@ -579,7 +867,7 @@ window.asistente-window {
     background-color: rgba(243, 139, 168, 0.15);
 }
 
-/* Minimal Slim Scrollbars */
+/* --- 11. Minimal Slim Scrollbars --- */
 scrollbar {
     background: transparent;
 }
@@ -590,26 +878,27 @@ scrollbar trough {
 
 scrollbar slider {
     background-color: rgba(255, 255, 255, 0.12);
-    border-radius: 6px;
+    border-radius: 20px;
     min-width: 4px;
     min-height: 4px;
+    transition: background-color 180ms ease;
 }
 
 scrollbar slider:hover {
     background-color: rgba(255, 255, 255, 0.22);
 }
 
-/* Voice-to-Voice Call Mode */
+/* --- 12. Voice-to-Voice Call Mode --- */
 .call-screen {
     background: radial-gradient(circle at 50% 35%, #18192c 0%, #0d0e17 85%);
     padding: 10px 14px;
 }
 
 .call-top-bar {
-    background-color: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.07);
-    border-radius: 20px;
-    padding: 3px 12px;
+    background-color: rgba(255, 255, 255, 0.05);
+    border: none;
+    border-radius: 24px;
+    padding: 4px 14px;
 }
 
 .call-status-badge {
@@ -646,10 +935,11 @@ scrollbar slider:hover {
     font-size: 12.5px;
     color: #93c5fd;
     font-style: italic;
-    background-color: rgba(59, 130, 246, 0.1);
-    border-radius: 12px;
-    padding: 6px 12px;
-    margin-bottom: 4px;
+    background-color: rgba(59, 130, 246, 0.12);
+    border: none;
+    border-radius: 20px;
+    padding: 7px 14px;
+    margin-bottom: 5px;
 }
 
 .call-asst-subtitle {
@@ -665,11 +955,11 @@ scrollbar slider:hover {
 
 .call-control-btn {
     border-radius: 50%;
-    min-width: 44px;
-    min-height: 44px;
+    min-width: 46px;
+    min-height: 46px;
     padding: 8px;
     background-color: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    border: none;
     color: #e2e8f0;
     transition: all 180ms ease;
 }
@@ -681,7 +971,6 @@ scrollbar slider:hover {
 
 .call-btn-active-mute {
     background-color: rgba(239, 68, 68, 0.25);
-    border-color: rgba(239, 68, 68, 0.5);
     color: #f87171;
 }
 
@@ -703,17 +992,1312 @@ scrollbar slider:hover {
     box-shadow: 0 6px 18px rgba(220, 38, 38, 0.55);
 }
 
-.header-call-btn {
-    border-radius: 7px;
-    padding: 3px 6px;
-    min-width: 28px;
-    min-height: 28px;
-    color: #38bdf8;
-    background-color: rgba(56, 189, 248, 0.1);
-    border: 1px solid rgba(56, 189, 248, 0.22);
+/* --- 13. Terminal View Component --- */
+.terminal-view-container {
+    background-color: #11111b;
 }
 
-.header-call-btn:hover {
-    background-color: rgba(56, 189, 248, 0.22);
-    color: #7dd3fc;
+.terminal-top-bar {
+    background-color: #181825;
+    border-bottom: none;
+    padding: 6px 12px;
+    min-height: 38px;
 }
+
+.terminal-title-label {
+    font-size: 12px;
+    color: #cdd6f4;
+}
+
+.terminal-pid-badge {
+    border-radius: 20px;
+    border: none;
+    padding: 2px 8px;
+    font-size: 10px;
+    font-weight: 600;
+}
+
+.terminal-badge-running {
+    background-color: rgba(166, 227, 161, 0.14);
+    color: #a6e3a1;
+}
+
+.terminal-badge-stopped {
+    background-color: rgba(243, 139, 168, 0.14);
+    color: #f38ba8;
+}
+
+.terminal-action-btn {
+    border-radius: 20px;
+    padding: 3px 8px;
+    font-size: 10.5px;
+    color: #a6adc8;
+    background-color: rgba(255, 255, 255, 0.05);
+    border: none;
+    transition: all 150ms ease;
+}
+
+.terminal-action-btn:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: #cdd6f4;
+}
+
+.terminal-back-btn {
+    border-radius: 20px;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #89b4fa;
+    background-color: rgba(137, 180, 250, 0.14);
+    border: none;
+    transition: all 150ms ease;
+}
+
+.terminal-back-btn:hover {
+    background-color: rgba(137, 180, 250, 0.25);
+    color: #b4befe;
+}
+
+.terminal-scrolled-window {
+    background-color: #0d0e15;
+}
+
+.terminal-text-view {
+    background-color: #0d0e15;
+    color: #cdd6f4;
+    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+    font-size: 11.5px;
+    caret-color: #a6e3a1;
+}
+
+.terminal-bottom-bar {
+    background-color: #181825;
+    border-top: none;
+    padding: 6px 12px;
+}
+
+.terminal-quick-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: #6c7086;
+    margin-right: 4px;
+}
+
+.terminal-quick-chip {
+    border-radius: 20px;
+    padding: 3px 9px;
+    font-size: 10.5px;
+    background-color: #1e1e2e;
+    color: #cdd6f4;
+    border: none;
+    transition: all 150ms ease;
+}
+
+.terminal-quick-chip:hover {
+    background-color: #313244;
+    color: #a6e3a1;
+}
+
+.terminal-info-tip {
+    font-size: 9.5px;
+    color: #6c7086;
+    font-style: italic;
+    margin-top: 2px;
+}
+
+/* --- 14. Password Prompt & Security Dialog --- */
+window.asistente-password-dialog {
+    background-color: #161622;
+    border-radius: 18px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 14px 40px rgba(0, 0, 0, 0.65);
+}
+
+.password-dialog-icon {
+    color: #89b4fa;
+    background-color: rgba(137, 180, 250, 0.12);
+    border-radius: 12px;
+    padding: 6px;
+}
+
+window.asistente-password-dialog .card {
+    background-color: #1e1e2e;
+    border-radius: 12px;
+    padding: 10px 14px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+window.asistente-password-dialog passwordentry {
+    background-color: #181825;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    color: #cdd6f4;
+    padding: 6px 10px;
+}
+
+window.asistente-password-dialog passwordentry:focus-within {
+    border-color: #89b4fa;
+    box-shadow: 0 0 0 2px rgba(137, 180, 250, 0.25);
+}
+
+window.asistente-password-dialog entry {
+    background-color: #181825;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    color: #cdd6f4;
+    padding: 4px 8px;
+}
+
+/* --- 15. Heartbeats & Automations UI --- */
+.header-heartbeat-btn {
+    color: #a6adc8;
+    transition: all 180ms ease;
+}
+
+.header-heartbeat-btn:hover {
+    color: #f38ba8;
+    background-color: rgba(243, 139, 168, 0.12);
+}
+
+.heartbeat-active {
+    color: #f38ba8;
+    background-color: rgba(243, 139, 168, 0.15);
+}
+
+.automation-card {
+    background-color: rgba(243, 139, 168, 0.06);
+    border: 1px solid rgba(243, 139, 168, 0.18);
+    border-radius: 16px;
+    padding: 10px 14px;
+    margin: 6px 0 10px 0;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.22);
+}
+
+.automation-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: #f5c2e7;
+    letter-spacing: 0.2px;
+}
+
+.automation-card-icon {
+    color: #f38ba8;
+}
+
+.automation-badge {
+    font-size: 9px;
+    font-weight: 700;
+    color: #f38ba8;
+    background-color: rgba(243, 139, 168, 0.18);
+    border-radius: 20px;
+    padding: 2px 7px;
+    letter-spacing: 0.3px;
+}
+
+.automation-body {
+    margin-top: 4px;
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: #cdd6f4;
+}
+
+/* --- 16. Options Dropdown Menu --- */
+.header-menu-btn {
+    color: #a6adc8;
+}
+
+.header-menu-btn:hover {
+    color: #cdd6f4;
+    background-color: rgba(255, 255, 255, 0.08);
+}
+
+.menu-btn-call-active {
+    color: #f38ba8;
+    background-color: rgba(243, 139, 168, 0.15);
+}
+
+.menu-btn-terminal-active {
+    color: #a6e3a1;
+    background-color: rgba(166, 227, 161, 0.2);
+}
+
+.menu-btn-heartbeat-active {
+    color: #f38ba8;
+}
+
+popover.menu-popover contents {
+    background-color: #181825;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    padding: 4px;
+    min-width: 220px;
+}
+
+.menu-item-row {
+    border-radius: 8px;
+    padding: 5px 8px;
+    color: #cdd6f4;
+    background: transparent;
+    border: none;
+    transition: all 130ms ease;
+    min-height: 28px;
+}
+
+.menu-item-row:hover {
+    background-color: rgba(255, 255, 255, 0.07);
+    color: #ffffff;
+}
+
+.menu-item-label {
+    font-size: 11px;
+    font-weight: 500;
+    color: #cdd6f4;
+}
+
+.menu-item-row:hover .menu-item-label {
+    color: #ffffff;
+}
+
+.menu-item-destructive:hover {
+    background-color: rgba(243, 139, 168, 0.12);
+    color: #f38ba8;
+}
+
+.menu-accel-label {
+    font-size: 9.5px;
+    font-weight: 500;
+    color: #6c7086;
+    background-color: rgba(255, 255, 255, 0.05);
+    border-radius: 4px;
+    padding: 1px 5px;
+}
+
+.menu-badge-label {
+    font-size: 9px;
+    font-weight: 600;
+    border-radius: 8px;
+    padding: 1px 6px;
+    background-color: rgba(243, 139, 168, 0.15);
+    color: #f38ba8;
+}
+
+.menu-separator {
+    margin: 3px 4px;
+    background-color: rgba(255, 255, 255, 0.06);
+}
+
+.menu-icon-terminal {
+    color: #a6e3a1;
+}
+
+.menu-icon-call {
+    color: #38bdf8;
+}
+
+.menu-icon-heartbeat {
+    color: #f38ba8;
+}
+
+.menu-icon-settings {
+    color: #cba6f7;
+}
+
+.menu-icon-clear {
+    color: #9399b2;
+}
+
+.menu-icon-theme {
+    color: #f9e2af;
+}
+
+/* ==========================================================================
+   SKILLS AUTOCOMPLETE POPOVER
+   ========================================================================== */
+
+.skills-autocomplete-popover {
+    border-radius: 12px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+
+.skills-autocomplete-container {
+    padding: 6px;
+    background-color: #1e1e2e;
+    border-radius: 10px;
+    min-width: 360px;
+}
+
+.skills-autocomplete-header {
+    padding: 6px 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    color: #89b4fa;
+    margin-bottom: 4px;
+}
+
+.skills-autocomplete-header image {
+    color: #89b4fa;
+}
+
+.skills-autocomplete-list {
+    background: transparent;
+}
+
+.skill-autocomplete-row {
+    border-radius: 8px;
+    padding: 2px 4px;
+    transition: background-color 120ms ease;
+}
+
+.skill-autocomplete-row:hover,
+.skill-autocomplete-row:selected {
+    background-color: rgba(137, 180, 250, 0.15);
+}
+
+.skill-id-badge {
+    background-color: rgba(137, 180, 250, 0.2);
+    color: #89b4fa;
+    font-family: monospace;
+    font-size: 11px;
+    font-weight: bold;
+    padding: 1px 6px;
+    border-radius: 4px;
+}
+
+.skill-source-hint {
+    color: #a6adc8;
+    font-size: 10px;
+    background-color: rgba(255, 255, 255, 0.05);
+    padding: 1px 5px;
+    border-radius: 4px;
+}
+
+.skill-desc-hint {
+    color: #bac2de;
+    font-size: 11px;
+    margin-top: 1px;
+}
+
+/* ==========================================================================
+   MODO CLARO (LIGHT THEME - .theme-light)
+   Minimalist, Curvy & Borderless Light Palette (Catppuccin Latte / Clean Slate)
+   ========================================================================== */
+
+/* --- 1. Global Window & Foundations --- */
+window.asistente-window.theme-light {
+    background-color: #f4f6fb;
+    box-shadow: 0 16px 48px rgba(15, 23, 42, 0.16);
+}
+
+window.asistente-window.theme-light:backdrop {
+    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.10);
+}
+
+window.asistente-window.theme-light label selection,
+window.asistente-window.theme-light textview text selection {
+    background-color: rgba(37, 99, 235, 0.22);
+    color: #0f172a;
+}
+
+/* --- 2. Header Bar --- */
+.theme-light .asistente-header {
+    background-color: #eaedf5;
+}
+
+.theme-light .header-title {
+    color: #1e293b;
+}
+
+.theme-light .header-icon-btn {
+    color: #475569;
+}
+
+.theme-light .header-icon-btn:hover {
+    background-color: rgba(15, 23, 42, 0.08);
+    color: #0f172a;
+}
+
+.theme-light .model-pill {
+    background-color: rgba(15, 23, 42, 0.06);
+    color: #475569;
+}
+
+.theme-light .model-pill:hover {
+    background-color: rgba(15, 23, 42, 0.11);
+    color: #1e293b;
+}
+
+.theme-light .status-pill,
+.theme-light .status-pill-connected {
+    background-color: rgba(22, 163, 74, 0.14);
+    color: #15803d;
+}
+
+.theme-light .status-pill-connecting {
+    background-color: rgba(202, 138, 4, 0.16);
+    color: #b45309;
+}
+
+.theme-light .status-pill-error {
+    background-color: rgba(220, 38, 38, 0.14);
+    color: #b91c1c;
+}
+
+.theme-light .status-pill-disconnected {
+    background-color: rgba(15, 23, 42, 0.08);
+    color: #64748b;
+}
+
+.theme-light .header-call-btn {
+    color: #0284c7;
+    background-color: rgba(2, 132, 199, 0.12);
+}
+
+.theme-light .header-call-btn:hover {
+    background-color: rgba(2, 132, 199, 0.22);
+    color: #0369a1;
+}
+
+.theme-light .header-terminal-btn {
+    color: #15803d;
+    background-color: rgba(22, 163, 74, 0.12);
+}
+
+.theme-light .header-terminal-btn:hover {
+    background-color: rgba(22, 163, 74, 0.22);
+    color: #166534;
+}
+
+.theme-light .terminal-btn-active {
+    background-color: #16a34a;
+    color: #ffffff;
+}
+
+/* --- 3. Welcome / Empty State --- */
+.theme-light .welcome-avatar-box {
+    background: radial-gradient(circle, rgba(37, 99, 235, 0.16) 0%, rgba(99, 102, 241, 0.05) 65%, transparent 100%);
+}
+
+.theme-light .welcome-avatar-icon {
+    color: #2563eb;
+}
+
+.theme-light .welcome-title {
+    color: #1e293b;
+}
+
+.theme-light .welcome-subtitle {
+    color: #64748b;
+}
+
+.theme-light .suggestion-chip {
+    background-color: #ffffff;
+    color: #1e293b;
+    box-shadow: 0 2px 6px rgba(15, 23, 42, 0.05);
+}
+
+.theme-light .suggestion-chip:hover {
+    background-color: rgba(37, 99, 235, 0.10);
+    color: #1d4ed8;
+}
+
+.theme-light .suggestion-arrow {
+    color: #64748b;
+}
+
+.theme-light .suggestion-chip:hover .suggestion-arrow {
+    color: #2563eb;
+}
+
+/* --- 4. Chat View & Messages --- */
+.theme-light .user-bubble {
+    background-color: #dfe7f6;
+    color: #0f172a;
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+}
+
+.theme-light .user-bubble .message-text {
+    color: #0f172a;
+}
+
+.theme-light .user-bubble-queued {
+    background-color: #e8edf7;
+    border: 1px dashed rgba(15, 23, 42, 0.25);
+}
+
+.theme-light .queue-badge {
+    color: #475569;
+    background-color: rgba(15, 23, 42, 0.08);
+}
+
+.theme-light .assistant-bubble,
+.theme-light .assistant-message {
+    color: #1e293b;
+}
+
+.theme-light .message-text {
+    color: #1e293b;
+}
+
+.theme-light .assistant-bot-icon,
+.theme-light .assistant-title-label {
+    color: #2563eb;
+}
+
+.theme-light .assistant-action-btn {
+    color: #64748b;
+}
+
+.theme-light .assistant-action-btn:hover {
+    background-color: rgba(15, 23, 42, 0.08);
+    color: #2563eb;
+}
+
+.theme-light .bubble-copy-btn {
+    color: #64748b;
+}
+
+.theme-light .bubble-copy-btn:hover {
+    color: #2563eb;
+    background-color: rgba(15, 23, 42, 0.08);
+}
+
+/* --- 5. LLM Thinking Card --- */
+.theme-light .thinking-card {
+    background-color: rgba(124, 58, 237, 0.07);
+}
+
+.theme-light .thinking-card:hover {
+    background-color: rgba(124, 58, 237, 0.12);
+}
+
+.theme-light .thinking-icon,
+.theme-light .thinking-title {
+    color: #7c3aed;
+}
+
+.theme-light .thinking-badge-active {
+    color: #7c3aed;
+    background-color: rgba(124, 58, 237, 0.14);
+}
+
+.theme-light .thinking-badge-done {
+    color: #64748b;
+}
+
+.theme-light .thinking-toggle-btn {
+    color: #64748b;
+}
+
+.theme-light .thinking-toggle-btn:hover {
+    color: #7c3aed;
+    background-color: rgba(124, 58, 237, 0.12);
+}
+
+.theme-light .thinking-details {
+    border-left: 2px solid rgba(124, 58, 237, 0.40);
+}
+
+.theme-light .thinking-text {
+    color: #475569;
+}
+
+/* --- 6. Tool Execution Card --- */
+.theme-light .tool-card {
+    background-color: rgba(15, 23, 42, 0.045);
+}
+
+.theme-light .tool-title {
+    color: #2563eb;
+}
+
+.theme-light .tool-badge-running {
+    color: #1d4ed8;
+    background-color: rgba(37, 99, 235, 0.14);
+}
+
+.theme-light .tool-badge-success {
+    color: #15803d;
+    background-color: rgba(22, 163, 74, 0.14);
+}
+
+.theme-light .tool-badge-error {
+    color: #b91c1c;
+    background-color: rgba(220, 38, 38, 0.14);
+}
+
+.theme-light .tool-icon-success {
+    color: #16a34a;
+}
+
+.theme-light .tool-icon-error {
+    color: #dc2626;
+}
+
+.theme-light .tool-toggle-btn {
+    color: #64748b;
+}
+
+.theme-light .tool-toggle-btn:hover {
+    color: #1e293b;
+    background-color: rgba(15, 23, 42, 0.08);
+}
+
+.theme-light .tool-details {
+    background-color: #ffffff;
+    color: #334155;
+    box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.05);
+}
+
+/* --- 7. Code Card & Blocks --- */
+.theme-light .code-card {
+    background-color: #ffffff;
+    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.07);
+}
+
+.theme-light .code-header {
+    background-color: #eaedf5;
+}
+
+.theme-light .code-lang-label {
+    color: #2563eb;
+}
+
+.theme-light .code-copy-btn {
+    color: #334155;
+}
+
+.theme-light .code-copy-btn:hover {
+    background-color: rgba(15, 23, 42, 0.08);
+    color: #2563eb;
+}
+
+.theme-light .code-body {
+    color: #0f766e;
+    background-color: #ffffff;
+}
+
+/* --- 8. Markdown Table Card & Cells --- */
+.theme-light .table-card {
+    background-color: #ffffff;
+    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.07);
+}
+
+.theme-light .table-header-bar {
+    background-color: #eaedf5;
+}
+
+.theme-light .table-badge-label {
+    color: #2563eb;
+}
+
+.theme-light .table-cell {
+    border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+    color: #1e293b;
+}
+
+.theme-light .table-cell-divider {
+    border-right: 1px solid rgba(15, 23, 42, 0.06);
+}
+
+.theme-light .table-header-cell {
+    background-color: #f1f5f9;
+    color: #1e3a8a;
+}
+
+.theme-light .table-row-odd {
+    background-color: #ffffff;
+}
+
+.theme-light .table-row-even {
+    background-color: #f8fafc;
+}
+
+/* --- 9. Input Area --- */
+.theme-light .input-card {
+    background-color: #ffffff;
+    box-shadow: 0 4px 18px rgba(15, 23, 42, 0.09);
+}
+
+.theme-light .input-card:focus-within {
+    background-color: #ffffff;
+    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.30), 0 6px 22px rgba(15, 23, 42, 0.13);
+}
+
+.theme-light .chat-text-view {
+    color: #0f172a;
+}
+
+.theme-light .mic-button {
+    background-color: rgba(15, 23, 42, 0.06);
+    color: #475569;
+}
+
+.theme-light .mic-button:hover {
+    background-color: rgba(15, 23, 42, 0.12);
+    color: #0f172a;
+}
+
+.theme-light .mic-button-recording {
+    background-color: #ef4444;
+    color: #ffffff;
+}
+
+.theme-light .mic-button-transcribing {
+    background-color: rgba(37, 99, 235, 0.16);
+    color: #2563eb;
+}
+
+.theme-light .stop-button {
+    background-color: #ef4444;
+    color: #ffffff;
+}
+
+.theme-light .input-hint {
+    color: #64748b;
+}
+
+.theme-light .system-notice {
+    color: #64748b;
+}
+
+.theme-light .error-notice {
+    color: #b91c1c;
+    background-color: rgba(220, 38, 38, 0.10);
+}
+
+/* --- 10. Conversation Threads Sidebar --- */
+.theme-light .thread-sidebar {
+    background-color: #e6eaf3;
+}
+
+.theme-light .thread-sidebar-title {
+    color: #1e293b;
+}
+
+.theme-light .sidebar-close-btn {
+    color: #475569;
+}
+
+.theme-light .sidebar-close-btn:hover {
+    background-color: rgba(15, 23, 42, 0.08);
+    color: #0f172a;
+}
+
+.theme-light .new-thread-btn {
+    background-color: rgba(37, 99, 235, 0.12);
+    color: #2563eb;
+}
+
+.theme-light .new-thread-btn:hover {
+    background-color: rgba(37, 99, 235, 0.22);
+    color: #1d4ed8;
+}
+
+.theme-light .thread-row:hover {
+    background-color: rgba(15, 23, 42, 0.055);
+}
+
+.theme-light .thread-row-active {
+    background-color: rgba(37, 99, 235, 0.14);
+}
+
+.theme-light .thread-item-title {
+    color: #1e293b;
+}
+
+.theme-light .thread-item-date {
+    color: #64748b;
+}
+
+.theme-light .thread-row-running {
+    background-color: rgba(37, 99, 235, 0.10);
+    border-left: 2px solid #2563eb;
+}
+
+.theme-light .thread-item-running-date {
+    color: #2563eb;
+}
+
+.theme-light .running-sessions-pill {
+    background-color: rgba(37, 99, 235, 0.14);
+    color: #2563eb;
+}
+
+.theme-light .running-sessions-pill:hover {
+    background-color: rgba(37, 99, 235, 0.24);
+    color: #1e3a8a;
+}
+
+.theme-light .thread-del-btn {
+    color: #64748b;
+}
+
+.theme-light .thread-del-btn:hover {
+    color: #dc2626;
+    background-color: rgba(220, 38, 38, 0.14);
+}
+
+/* --- 11. Minimal Slim Scrollbars --- */
+.theme-light scrollbar slider {
+    background-color: rgba(15, 23, 42, 0.16);
+}
+
+.theme-light scrollbar slider:hover {
+    background-color: rgba(15, 23, 42, 0.28);
+}
+
+/* --- 12. Voice-to-Voice Call Mode --- */
+.theme-light .call-screen {
+    background: radial-gradient(circle at 50% 35%, #ffffff 0%, #e2e8f0 85%);
+}
+
+.theme-light .call-top-bar {
+    background-color: rgba(15, 23, 42, 0.06);
+}
+
+.theme-light .call-status-badge {
+    color: #334155;
+}
+
+.theme-light .call-badge-listening {
+    color: #16a34a;
+}
+
+.theme-light .call-badge-thinking {
+    color: #d97706;
+}
+
+.theme-light .call-badge-speaking {
+    color: #7c3aed;
+}
+
+.theme-light .call-timer-label {
+    color: #475569;
+}
+
+.theme-light .call-user-subtitle {
+    color: #1d4ed8;
+    background-color: rgba(37, 99, 235, 0.10);
+}
+
+.theme-light .call-asst-subtitle {
+    color: #0f172a;
+}
+
+.theme-light .call-control-btn {
+    background-color: rgba(15, 23, 42, 0.08);
+    color: #1e293b;
+}
+
+.theme-light .call-control-btn:hover {
+    background-color: rgba(15, 23, 42, 0.15);
+    color: #0f172a;
+}
+
+.theme-light .call-btn-active-mute {
+    background-color: rgba(220, 38, 38, 0.16);
+    color: #dc2626;
+}
+
+/* --- 13. Terminal View Component --- */
+.theme-light .terminal-view-container {
+    background-color: #f8fafc;
+}
+
+.theme-light .terminal-top-bar,
+.theme-light .terminal-bottom-bar {
+    background-color: #eaedf5;
+}
+
+.theme-light .terminal-title-label {
+    color: #1e293b;
+}
+
+.theme-light .terminal-badge-running {
+    background-color: rgba(22, 163, 74, 0.14);
+    color: #15803d;
+}
+
+.theme-light .terminal-badge-stopped {
+    background-color: rgba(220, 38, 38, 0.14);
+    color: #b91c1c;
+}
+
+.theme-light .terminal-action-btn {
+    color: #475569;
+    background-color: rgba(15, 23, 42, 0.06);
+}
+
+.theme-light .terminal-action-btn:hover {
+    background-color: rgba(15, 23, 42, 0.12);
+    color: #0f172a;
+}
+
+.theme-light .terminal-back-btn {
+    color: #2563eb;
+    background-color: rgba(37, 99, 235, 0.12);
+}
+
+.theme-light .terminal-back-btn:hover {
+    background-color: rgba(37, 99, 235, 0.22);
+    color: #1d4ed8;
+}
+
+.theme-light .terminal-scrolled-window,
+.theme-light .terminal-text-view {
+    background-color: #ffffff;
+    color: #1e293b;
+    caret-color: #16a34a;
+}
+
+.theme-light .terminal-quick-label {
+    color: #64748b;
+}
+
+.theme-light .terminal-quick-chip {
+    background-color: #ffffff;
+    color: #334155;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+}
+
+.theme-light .terminal-quick-chip:hover {
+    background-color: #dbeafe;
+    color: #1d4ed8;
+}
+
+.theme-light .terminal-info-tip {
+    color: #64748b;
+}
+
+/* --- 14. Password Prompt & Security Dialog --- */
+window.asistente-password-dialog.theme-light {
+    background-color: #f8fafc;
+    border: 1px solid rgba(15, 23, 42, 0.10);
+    box-shadow: 0 14px 40px rgba(15, 23, 42, 0.20);
+}
+
+window.asistente-password-dialog.theme-light .password-dialog-icon {
+    color: #2563eb;
+    background-color: rgba(37, 99, 235, 0.12);
+}
+
+window.asistente-password-dialog.theme-light .card {
+    background-color: #ffffff;
+    border: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+window.asistente-password-dialog.theme-light passwordentry,
+window.asistente-password-dialog.theme-light entry {
+    background-color: #f1f5f9;
+    border: 1px solid rgba(15, 23, 42, 0.12);
+    color: #0f172a;
+}
+
+/* --- 15. Heartbeats & Automations UI --- */
+.theme-light .header-heartbeat-btn {
+    color: #475569;
+}
+
+.theme-light .header-heartbeat-btn:hover {
+    color: #db2777;
+    background-color: rgba(219, 39, 119, 0.10);
+}
+
+.theme-light .heartbeat-active {
+    color: #db2777;
+    background-color: rgba(219, 39, 119, 0.14);
+}
+
+.theme-light .automation-card {
+    background-color: rgba(219, 39, 119, 0.05);
+    border: 1px solid rgba(219, 39, 119, 0.20);
+    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
+}
+
+.theme-light .automation-title {
+    color: #be185d;
+}
+
+.theme-light .automation-card-icon {
+    color: #db2777;
+}
+
+.theme-light .automation-badge {
+    color: #be185d;
+    background-color: rgba(219, 39, 119, 0.14);
+}
+
+.theme-light .automation-body {
+    color: #1e293b;
+}
+
+/* --- 16. Options Dropdown Menu & Popovers --- */
+.theme-light .header-menu-btn {
+    color: #475569;
+}
+
+.theme-light .header-menu-btn:hover {
+    color: #0f172a;
+    background-color: rgba(15, 23, 42, 0.08);
+}
+
+.theme-light .menu-btn-call-active {
+    color: #dc2626;
+    background-color: rgba(220, 38, 38, 0.14);
+}
+
+.theme-light .menu-btn-terminal-active {
+    color: #15803d;
+    background-color: rgba(22, 163, 74, 0.16);
+}
+
+.theme-light .menu-btn-heartbeat-active {
+    color: #db2777;
+}
+
+.theme-light popover.menu-popover contents,
+popover.menu-popover.theme-light contents {
+    background-color: #ffffff;
+    border: 1px solid rgba(15, 23, 42, 0.10);
+    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.15);
+}
+
+.theme-light .menu-item-row {
+    color: #1e293b;
+}
+
+.theme-light .menu-item-row:hover {
+    background-color: rgba(15, 23, 42, 0.06);
+    color: #0f172a;
+}
+
+.theme-light .menu-item-label {
+    color: #1e293b;
+}
+
+.theme-light .menu-item-row:hover .menu-item-label {
+    color: #0f172a;
+}
+
+.theme-light .menu-item-destructive:hover {
+    background-color: rgba(220, 38, 38, 0.10);
+    color: #dc2626;
+}
+
+.theme-light .menu-accel-label {
+    color: #64748b;
+    background-color: rgba(15, 23, 42, 0.06);
+}
+
+.theme-light .menu-badge-label {
+    background-color: rgba(219, 39, 119, 0.14);
+    color: #be185d;
+}
+
+.theme-light .menu-separator {
+    background-color: rgba(15, 23, 42, 0.08);
+}
+
+.theme-light .menu-icon-terminal {
+    color: #16a34a;
+}
+
+.theme-light .menu-icon-call {
+    color: #0284c7;
+}
+
+.theme-light .menu-icon-heartbeat {
+    color: #db2777;
+}
+
+.theme-light .menu-icon-settings {
+    color: #7c3aed;
+}
+
+.theme-light .menu-icon-clear {
+    color: #64748b;
+}
+
+.theme-light .menu-icon-theme {
+    color: #4f46e5;
+}
+
+.theme-light .skills-autocomplete-popover,
+.skills-autocomplete-popover.theme-light {
+    box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18);
+}
+
+.theme-light .skills-autocomplete-container {
+    background-color: #ffffff;
+    border: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.theme-light .skills-autocomplete-header {
+    border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+    color: #2563eb;
+}
+
+.theme-light .skills-autocomplete-header image {
+    color: #2563eb;
+}
+
+.theme-light .skill-autocomplete-row:hover,
+.theme-light .skill-autocomplete-row:selected {
+    background-color: rgba(37, 99, 235, 0.12);
+}
+
+.theme-light .skill-id-badge {
+    background-color: rgba(37, 99, 235, 0.14);
+    color: #1d4ed8;
+}
+
+.theme-light .skill-source-hint {
+    color: #475569;
+    background-color: rgba(15, 23, 42, 0.06);
+}
+
+.theme-light .skill-desc-hint {
+    color: #475569;
+}
+
+/* --- 17. Attachments & Multimodal Media UI --- */
+.attach-button {
+    border-radius: 50%;
+    min-width: 32px;
+    min-height: 32px;
+    padding: 5px;
+    color: #a6adc8;
+    background-color: transparent;
+    border: none;
+    transition: all 160ms ease;
+}
+
+.attach-button:hover {
+    color: #89b4fa;
+    background-color: rgba(137, 180, 250, 0.14);
+}
+
+.attach-button-active {
+    color: #89b4fa;
+    background-color: rgba(137, 180, 250, 0.18);
+}
+
+.attachments-preview-scroll {
+    padding: 2px 4px 4px 4px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.attachments-preview-bar {
+    padding: 2px 2px;
+}
+
+.attachment-chip {
+    background-color: rgba(137, 180, 250, 0.14);
+    border: 1px solid rgba(137, 180, 250, 0.28);
+    border-radius: 14px;
+    padding: 3px 8px 3px 6px;
+    color: #cdd6f4;
+    transition: all 150ms ease;
+}
+
+.attachment-chip:hover {
+    background-color: rgba(137, 180, 250, 0.22);
+}
+
+.attachment-chip-thumb {
+    border-radius: 6px;
+}
+
+.attachment-chip-label {
+    font-size: 11px;
+    font-weight: 500;
+    color: #e2e8f0;
+}
+
+.attachment-chip-remove {
+    min-width: 18px;
+    min-height: 18px;
+    padding: 2px;
+    border-radius: 50%;
+    color: #94a3b8;
+}
+
+.attachment-chip-remove:hover {
+    color: #f38ba8;
+    background-color: rgba(243, 139, 168, 0.18);
+}
+
+.message-attachments-gallery {
+    margin-bottom: 4px;
+}
+
+.message-attachment-image {
+    background-color: rgba(0, 0, 0, 0.22);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px;
+    padding: 6px;
+}
+
+.attachment-image-preview {
+    border-radius: 8px;
+}
+
+.attachment-caption-label {
+    font-size: 10.5px;
+    color: rgba(255, 255, 255, 0.85);
+}
+
+.message-attachment-doc {
+    background-color: rgba(0, 0, 0, 0.20);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 10px;
+    padding: 6px 10px;
+}
+
+.attachment-doc-name {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: #ffffff;
+}
+
+.attachment-doc-meta {
+    font-size: 9.5px;
+    color: rgba(255, 255, 255, 0.75);
+}
+
+.theme-light .attach-button {
+    color: #64748b;
+}
+
+.theme-light .attach-button:hover,
+.theme-light .attach-button-active {
+    color: #2563eb;
+    background-color: rgba(37, 99, 235, 0.12);
+}
+
+.theme-light .attachments-preview-scroll {
+    border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.theme-light .attachment-chip {
+    background-color: rgba(37, 99, 235, 0.10);
+    border: 1px solid rgba(37, 99, 235, 0.24);
+    color: #1e293b;
+}
+
+.theme-light .attachment-chip-label {
+    color: #0f172a;
+}
+
+.theme-light .attachment-chip-remove {
+    color: #64748b;
+}
+
+.theme-light .attachment-chip-remove:hover {
+    color: #dc2626;
+    background-color: rgba(220, 38, 38, 0.14);
+}
+
+
+
+

@@ -58,6 +58,25 @@ def send_new_thread_command() -> bool:
         return False
 
 
+def send_quit_command() -> bool:
+    """
+    Sends a quit command to terminate the running assistant instance cleanly.
+    Returns True if successfully sent, False if server is not running.
+    """
+    if not SOCKET_PATH.exists():
+        return False
+
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        client.connect(str(SOCKET_PATH))
+        client.sendall(b"quit\n")
+        response = client.recv(1024)
+        client.close()
+        return True
+    except Exception:
+        return False
+
+
 class ToggleSocketServer:
     def __init__(
         self,
@@ -66,7 +85,8 @@ class ToggleSocketServer:
         on_hide: Optional[Callable[[], None]] = None,
         on_settings: Optional[Callable[[], None]] = None,
         on_clear: Optional[Callable[[], None]] = None,
-        on_new_thread: Optional[Callable[[], None]] = None
+        on_new_thread: Optional[Callable[[], None]] = None,
+        on_quit: Optional[Callable[[], None]] = None
     ):
         self.on_toggle = on_toggle
         self.on_show = on_show
@@ -74,6 +94,7 @@ class ToggleSocketServer:
         self.on_settings = on_settings
         self.on_clear = on_clear
         self.on_new_thread = on_new_thread
+        self.on_quit = on_quit
         self.running = False
         self.server_thread: Optional[threading.Thread] = None
 
@@ -120,6 +141,10 @@ class ToggleSocketServer:
                     if self.on_new_thread:
                         GLib.idle_add(self.on_new_thread)
                     conn.sendall(b"OK: new_thread\n")
+                elif data in ("quit", "exit"):
+                    if self.on_quit:
+                        GLib.idle_add(self.on_quit)
+                    conn.sendall(b"OK: quitting\n")
                 elif data == "ping":
                     conn.sendall(b"PONG\n")
                 conn.close()

@@ -11,11 +11,13 @@ mkdir -p "$BIN_DEST"
 mkdir -p "$DESKTOP_DEST"
 
 WRAPPER_SCRIPT="$BIN_DEST/pequeno-asistente"
-cat << 'EOF' > "$WRAPPER_SCRIPT"
+cat << EOF > "$WRAPPER_SCRIPT"
 #!/usr/bin/env bash
-PROJECT_DIR="/home/gato/Proyectos/Pequeño asistente"
-source "$PROJECT_DIR/.venv/bin/activate"
-exec python3 "$PROJECT_DIR/pequeno_asistente/main.py" "$@"
+PROJECT_DIR="$BASE_DIR"
+if [ -f "\$PROJECT_DIR/.venv/bin/activate" ]; then
+    source "\$PROJECT_DIR/.venv/bin/activate"
+fi
+exec python3 "\$PROJECT_DIR/pequeno_asistente/main.py" "\$@"
 EOF
 chmod +x "$WRAPPER_SCRIPT"
 

@@ -35,8 +35,21 @@ def format_relative_timestamp(iso_str: str) -> str:
         return iso_str[:10]
 
 
-def clean_thread_title(text: str) -> str:
+def clean_thread_title(text: Any) -> str:
     """Derives a concise, clean title for a conversation from the user's first prompt."""
+    if isinstance(text, list):
+        parts = []
+        for item in text:
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(str(item.get("text") or ""))
+            elif isinstance(item, str):
+                parts.append(item)
+        text = " ".join(parts)
+    elif not isinstance(text, str):
+        text = str(text or "")
+    # Remove embedded <attached_document ...> or <attached_image ...> blocks from title derivation
+    text = re.sub(r"<attached_(?:document|image)\b[^>]*>.*?</attached_(?:document|image)>", "", text, flags=re.DOTALL)
+    text = re.sub(r"<attached_(?:document|image)\b[^>]*/?>", "", text)
     cleaned = re.sub(r"[\r\n\t]+", " ", text).strip()
     # Strip common markdown headers or prefixes
     cleaned = re.sub(r"^[#>*`\-\s]+", "", cleaned)
@@ -45,6 +58,39 @@ def clean_thread_title(text: str) -> str:
     if len(cleaned) > 36:
         return cleaned[:36].rstrip() + "…"
     return cleaned
+
+
+def _sanitize_messages_for_disk(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Returns a copy of messages suitable for JSON persistence on disk, replacing
+    heavy inline base64 data URIs with compact placeholders while preserving
+    `attachments` metadata so images can be rehydrated from disk path when needed.
+    """
+    sanitized: List[Dict[str, Any]] = []
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        content = m.get("content")
+        if isinstance(content, list):
+            new_parts = []
+            for p in content:
+                if isinstance(p, dict) and p.get("type") == "image_url":
+                    url_val = p.get("image_url", {}).get("url", "")
+                    if isinstance(url_val, str) and url_val.startswith("data:") and len(url_val) > 256:
+                        new_parts.append({
+                            "type": "image_url",
+                            "image_url": {"url": "[persisted_attachment]"}
+                        })
+                    else:
+                        new_parts.append(p)
+                else:
+                    new_parts.append(p)
+            m_copy = dict(m)
+            m_copy["content"] = new_parts
+            sanitized.append(m_copy)
+        else:
+            sanitized.append(m)
+    return sanitized
 
 
 class ThreadManager:
@@ -67,9 +113,16 @@ class ThreadManager:
                         data = json.load(f)
 
                     msg_count = len(data.get("messages", []))
+                    tid = data.get("id", fpath.stem)
+                    title = data.get("title", "Conversación")
+
+                    # Skip empty abandoned default threads that are not active
+                    if msg_count == 0 and title in ("Nueva conversación", "Nuevo hilo", "") and tid != self.active_thread_id:
+                        continue
+
                     threads.append({
-                        "id": data.get("id", fpath.stem),
-                        "title": data.get("title", "Conversación"),
+                        "id": tid,
+                        "title": title,
                         "created_at": data.get("created_at", ""),
                         "updated_at": data.get("updated_at", ""),
                         "message_count": msg_count,
@@ -105,6 +158,12 @@ class ThreadManager:
             "title": title,
             "created_at": now.isoformat(),
             "updated_at": now.isoformat(),
+            "scratchpad": {
+                "objective": "",
+                "steps": [],
+                "current_step": "",
+                "notes": []
+            },
             "messages": []
         }
         self.active_thread_id = thread_id
@@ -120,25 +179,31 @@ class ThreadManager:
         """Saves messages to a thread, optionally auto-deriving title if default."""
         data = self.get_thread(thread_id)
         now = datetime.datetime.now().isoformat()
+        persisted_messages = _sanitize_messages_for_disk(messages)
         if not data:
             data = {
                 "id": thread_id,
                 "title": title or "Nueva conversación",
                 "created_at": now,
                 "updated_at": now,
-                "messages": messages
+                "messages": persisted_messages
             }
         else:
-            data["messages"] = messages
+            data["messages"] = persisted_messages
             data["updated_at"] = now
             if title:
                 data["title"] = title
             elif data.get("title") in ("Nueva conversación", "Nuevo hilo", ""):
                 # Find first user message with content
                 for m in messages:
-                    if m.get("role") == "user" and m.get("content"):
-                        data["title"] = clean_thread_title(m["content"])
-                        break
+                    if m.get("role") == "user" and not m.get("_auto_injected_media"):
+                        raw_title_src = m.get("display_text") or m.get("content")
+                        if not raw_title_src and m.get("attachments"):
+                            first_att = m["attachments"][0].get("name", "Archivo adjunto")
+                            raw_title_src = f"Adjunto: {first_att}"
+                        if raw_title_src:
+                            data["title"] = clean_thread_title(raw_title_src)
+                            break
 
         self._write_thread(thread_id, data)
         return data
@@ -182,6 +247,80 @@ class ThreadManager:
                 return th
 
         return self.create_thread()
+
+    def get_scratchpad(self, thread_id: str) -> Dict[str, Any]:
+        """Returns the working memory scratchpad for a given thread."""
+        data = self.get_thread(thread_id)
+        if not data:
+            return {"objective": "", "steps": [], "current_step": "", "notes": []}
+        return data.get("scratchpad", {"objective": "", "steps": [], "current_step": "", "notes": []})
+
+    def update_scratchpad(
+        self,
+        thread_id: str,
+        objective: Optional[str] = None,
+        current_step: Optional[str] = None,
+        add_step: Optional[str] = None,
+        add_note: Optional[str] = None,
+        clear: bool = False
+    ) -> Dict[str, Any]:
+        """Updates or appends state to a thread's working memory scratchpad."""
+        data = self.get_thread(thread_id)
+        if not data:
+            data = self.create_thread()
+            thread_id = data["id"]
+
+        if clear:
+            pad = {"objective": "", "steps": [], "current_step": "", "notes": []}
+        else:
+            pad = data.get("scratchpad", {"objective": "", "steps": [], "current_step": "", "notes": []})
+            if objective is not None:
+                pad["objective"] = objective
+            if current_step is not None:
+                pad["current_step"] = current_step
+            if add_step:
+                if "steps" not in pad:
+                    pad["steps"] = []
+                if add_step not in pad["steps"]:
+                    pad["steps"].append(add_step)
+            if add_note:
+                if "notes" not in pad:
+                    pad["notes"] = []
+                if add_note not in pad["notes"]:
+                    pad["notes"].append(add_note)
+
+        data["scratchpad"] = pad
+        data["updated_at"] = datetime.datetime.now().isoformat()
+        self._write_thread(thread_id, data)
+        return pad
+
+    def format_scratchpad_prompt(self, thread_id: str) -> str:
+        """Formats the active scratchpad into an actionable prompt section."""
+        pad = self.get_scratchpad(thread_id)
+        obj = pad.get("objective", "").strip()
+        cur = pad.get("current_step", "").strip()
+        steps = pad.get("steps", [])
+        notes = pad.get("notes", [])
+
+        if not obj and not cur and not steps and not notes:
+            return ""
+
+        parts = ["<working_memory>", "CUADERNO DE TRABAJO Y ESTADO DE TAREA ACTIVA:"]
+        if obj:
+            parts.append(f"- Objetivo principal: {obj}")
+        if cur:
+            parts.append(f"- Paso en curso: {cur}")
+        if steps:
+            parts.append("- Pasos completados:")
+            for s in steps:
+                parts.append(f"  ✓ {s}")
+        if notes:
+            parts.append("- Hallazgos y datos clave obtenidos:")
+            for n in notes[-6:]:
+                parts.append(f"  • {n}")
+        parts.append("Instrucción: Utiliza este cuaderno activo para mantener el foco, no re-ejecutar pasos ya completados y sintetizar la meta.")
+        parts.append("</working_memory>")
+        return "\n".join(parts)
 
     def _write_thread(self, thread_id: str, data: Dict[str, Any]):
         fpath = self.threads_dir / f"{thread_id}.json"

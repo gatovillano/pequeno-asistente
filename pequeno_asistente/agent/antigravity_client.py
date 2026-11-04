@@ -124,19 +124,21 @@ class AntigravityClient:
         logger.info("Token de Antigravity refrescado correctamente.")
         return cls._access_token
 
+    CODE_ASSIST_ENDPOINT_DAILY = "https://daily-cloudcode-pa.googleapis.com"
     CODE_ASSIST_ENDPOINT_PROD = "https://cloudcode-pa.googleapis.com"
-    CODE_ASSIST_ENDPOINT_DAILY = "https://daily-cloudcode-pa.sandbox.googleapis.com"
+    CODE_ASSIST_ENDPOINT_DAILY_SANDBOX = "https://daily-cloudcode-pa.sandbox.googleapis.com"
     CODE_ASSIST_ENDPOINT_AUTOPUSH = "https://autopush-cloudcode-pa.sandbox.googleapis.com"
 
     CODE_ASSIST_ENDPOINTS = [
-        CODE_ASSIST_ENDPOINT_PROD,
         CODE_ASSIST_ENDPOINT_DAILY,
+        CODE_ASSIST_ENDPOINT_PROD,
+        CODE_ASSIST_ENDPOINT_DAILY_SANDBOX,
         CODE_ASSIST_ENDPOINT_AUTOPUSH,
     ]
 
     @classmethod
     def get_endpoints(cls) -> List[str]:
-        custom_ep = os.getenv("KOGNITERM_ANTIGRAVITY_ENDPOINT")
+        custom_ep = os.getenv("PEQUENO_ASISTENTE_ANTIGRAVITY_ENDPOINT") or os.getenv("KOGNITERM_ANTIGRAVITY_ENDPOINT")
         if custom_ep:
             return [custom_ep.rstrip("/")]
         return list(cls.CODE_ASSIST_ENDPOINTS)
@@ -640,6 +642,9 @@ class AntigravityClient:
                             df.write(f"    functionCall: {json.dumps(p['functionCall'])}\n")
                         elif "functionResponse" in p:
                             df.write(f"    functionResponse: {json.dumps(p['functionResponse'])}\n")
+                        elif "inlineData" in p:
+                            inl = p.get("inlineData", {})
+                            df.write(f"    inlineData: mimeType={inl.get('mimeType')}, b64_len={len(inl.get('data', ''))}\n")
                         else:
                             df.write(f"    other: {json.dumps(p)}\n")
         except Exception as e:
@@ -747,7 +752,13 @@ class AntigravityClient:
         first_user_text = ""
         for msg in messages:
             if msg.get("role") == "user":
-                first_user_text = str(msg.get("content") or "")
+                mc = msg.get("content")
+                if isinstance(mc, list):
+                    first_user_text = " ".join(
+                        str(p.get("text") or "") for p in mc if isinstance(p, dict) and p.get("type") == "text"
+                    )
+                else:
+                    first_user_text = str(mc or "")
                 break
 
         session_id, request_id, labels = cls.get_session_envelope(first_user_text)
@@ -829,9 +840,9 @@ class AntigravityClient:
                             **fallback_kwargs
                         )
 
-                    # Si es cuota agotada del mismo modelo y estamos en el intento 0, no desperdiciar retries inútiles
-                    if is_quota_exhausted and attempt == 0 and ep_idx == 0:
-                        logger.warning(f"⚠️ Cuota agotada detectada en Antigravity para {model}. Omitiendo reintentos idénticos.")
+                    # Si es cuota agotada del mismo modelo y no es el último endpoint, rotar al siguiente inmediatamente
+                    if is_quota_exhausted and attempt == 0 and ep_idx < len(endpoints_to_try) - 1:
+                        logger.warning(f"⚠️ Cuota agotada detectada en Antigravity para {model} en {endpoint}. Probando siguiente endpoint...")
                         endpoint_failed = True
                         break
 

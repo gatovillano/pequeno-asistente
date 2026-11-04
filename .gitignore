@@ -1,24 +1,96 @@
-# Byte-compiled / optimized / DLL files
+# ==========================================
+# Python
+# ==========================================
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Virtual environments
+# Entornos virtuales
 .venv/
 venv/
 ENV/
 env/
 
-# Temporary and local runtime files
+# Testing y linters
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# ==========================================
+# Archivos locales, secretos y runtime
+# ==========================================
 .kognito_tmp/
 *.log
 .env
 .env.*
 !.env.example
+config_cloudflared*.yml
+*.db
+*.sqlite
+*.sqlite3
 
-# IDEs and OS
+# Almacenamiento y multimedia generada en runtime
+media/documents/*
+!media/documents/.gitkeep
+media/thumbnails/*
+!media/thumbnails/.gitkeep
+storage/onlyoffice/documents/*
+!storage/onlyoffice/documents/.gitkeep
+
+# ==========================================
+# Mobile (Node / Expo / React Native / Android)
+# ==========================================
+node_modules/
+.expo/
+.expo-shared/
+dist/
+web-build/
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# Binarios y artefactos de compilación Android
+*.apk
+*.aab
+*.ap_
+*.dex
+.gradle/
+.kotlin/
+.cxx/
+local.properties
+*.iml
+*.hprof
+*.jsbundle
+*.jks
+*.keystore
+!mobile/android/app/debug.keystore
+
+# ==========================================
+# IDEs y Sistema Operativo
+# ==========================================
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
 .DS_Store
+Thumbs.db

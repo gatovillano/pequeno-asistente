@@ -82,13 +82,55 @@ Un asistente de escritorio ágil, moderno y minimalista diseñado para Linux (Hy
    - **Interrupción Instantánea (*Barge-in*)**: Si el asistente está hablando y comienzas a hablar, la reproducción se detiene automáticamente para escucharte.
    - **Persistencia en el Chat**: Toda la conversación mantenida durante la llamada se guarda automáticamente en el hilo de chat actual al colgar.
 
+10. **Terminal Interactiva PTY Integrada (Estilo KogniTerm)**:
+   - **Soporte Completo para `sudo`**: Permite ejecutar comandos de superusuario que requieren ingresar contraseña de forma segura e interactiva a través de un pseudo-terminal (PTY) real en Linux.
+   - **Acceso Rápido con `Ctrl+T`**: Conmuta instantáneamente entre el Chat y la Terminal Interactiva con un solo clic en la cabecera o mediante atajo de teclado.
+   - **Experiencia de Consola Nativa**: Compatible con autocompletado con `Tab`, historial con flechas `↑`/`↓`, atajos POSIX (`Ctrl+C`, `Ctrl+D`, `Ctrl+L`, `Ctrl+Z`), selección de texto y renderizado de colores ANSI con `pyte`.
+   - **Barra de Acciones y Comandos Rápidos**: Botones para pegar desde el portapapeles, limpiar pantalla, interrumpir procesos y chips de ejecución inmediata (`sudo`, `sudo apt update`, `htop`, `systemctl`, etc.).
+
+11. **Gestión Segura de Contraseñas y Diálogo Gráfico para `sudo`**:
+   - **Diálogo Modal Nativo GTK4 / Libadwaita**: Cuando el agente o una herramienta necesita pedir una contraseña (para configurar servicios, bases de datos o para permisos elevados), se despliega una ventana modal segura con campo `Gtk.PasswordEntry`, botón para ver/ocultar y advertencia de mayúsculas activadas.
+   - **Sin Texto Plano en el Chat**: Las contraseñas nunca viajan en claro por el historial ni se envían en prompts al LLM; se encapsulan en un objeto seguro `SecureCredential` que enmascara los secretos en logs (`••••••••`) y memoria.
+   - **Helper `SUDO_ASKPASS` Integrado**: Script ejecutable (`scripts/pequeno-asistente-askpass`) conectado a las sesiones de consola, servidores MCP bash y terminal PTY; al ejecutar comandos con `sudo` o `sudo -A`, se abre automáticamente el diálogo gráfico de autenticación.
+   - **Herramientas de Seguridad del Agente**:
+     - `security__request_credential`: Solicita credenciales para configurar servicios devolviendo un `credential_id` seguro.
+     - `security__execute_sudo`: Ejecuta comandos administrativos abriendo el diálogo seguro de sudo si es necesario.
+     - `security__apply_credential`: Aplica una credencial guardada a un archivo de configuración con permisos restringidos (`0600`).
+
+12. **Ecosistema Completo de Habilidades (Skills) y Compatibilidad con Claude Code**:
+13. **Acceso Remoto con FastAPI, Cloudflare Tunnel y App Android**:
+    - **Servidor Backend FastAPI (`pequeno_asistente/server.py`)**: Expone endpoints REST y streaming en tiempo real vía Server-Sent Events (SSE) con soporte para autenticación Bearer API Key.
+    - **Túnel Seguro Cloudflare**: Script automatizado (`./scripts/start_remote.sh`) que levanta el servidor y crea un túnel público inmediato (`https://xxx.trycloudflare.com`) sin requerir abrir puertos en tu router.
+    - **App Móvil Android (`mobile/`)**: Aplicación desarrollada en React Native / Expo con tema oscuro, navegación por hilos persistentes, visualización en vivo de herramientas MCP y razonamiento, dictado por voz y compatibilidad directa con Expo Go y compilación a APK nativo.
+   - **Reconocimiento Automático Multi-Origen**:
+     - **Claude Code**: Escanea e integra al instante las habilidades de `~/.claude/skills` y `.claude/skills` (carpetas con `SKILL.md`, enlaces simbólicos y archivos markdown).
+     - **Estándar Global de Agentes (`skills.sh`)**: Reconoce habilidades en `~/.agents/skills` y `.agents/skills`.
+     - **Globales del Sistema Operativo**: Detecta habilidades instaladas a nivel de sistema en `/etc/agent-skills/`, `/usr/share/agent-skills/` y `/etc/pequeno-asistente/skills/`.
+     - **Habilidades de Usuario y Locales**: Administra `~/.config/pequeno-asistente/skills/` y skills del proyecto actual.
+   - **Instalación Versátil de Habilidades**:
+     - Desde repositorios de GitHub o URLs raw directas.
+     - Desde archivos locales `.md` o carpetas existentes (mediante copia o enlace simbólico `symlink`).
+     - Creación y redacción directa en Markdown con frontmatter estandarizado.
+     - Selección de destino de instalación (Pequeño Asistente, Claude Code o Estándar Global).
+   - **Pestaña en Preferencias (Habilidades)**:
+     - Buscador y filtro en tiempo real por origen (Claude Code, Pequeño Asistente, Agentes, Sistema).
+     - Botón "+ Instalar Habilidad" con asistente visual modal.
+     - Visor integrado de Markdown para inspeccionar las instrucciones procedimentales.
+     - Switches para activar o pausar cualquier habilidad de forma individual.
+   - **Herramientas Nativas del Agente**:
+     - `skills__list`: Lista el catálogo de habilidades con filtros por origen o búsqueda.
+     - `skills__get`: Consulta el contenido completo de una habilidad procedimental.
+     - `skills__install`: Instala habilidades desde enlaces de GitHub, URLs o especificaciones de texto.
+     - `skills__uninstall` y `skills__toggle`: Desinstala o pausa habilidades.
+
 ---
 
 ## 🚀 Instalación y Puesta en Marcha
 
 ### 1. Activar el entorno e instalar dependencias
 ```bash
-cd "/home/gato/Proyectos/Pequeño asistente"
+cd "Pequeño asistente"
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
@@ -158,7 +200,13 @@ Pequeño asistente/
 │   └── main.py              # Punto de entrada de la aplicación
 ├── scripts/
 │   ├── toggle.sh            # Script para alternar ventana
+│   ├── start_remote.sh      # Inicia servidor FastAPI + Túnel público Cloudflare
+│   ├── start_remote.py      # Gestor de procesos FastAPI y Cloudflare Tunnel
 │   └── install_desktop.sh   # Instalador del lanzador y atajos
+├── mobile/                  # Aplicación Android (React Native / Expo)
+│   ├── App.tsx              # Componente principal con chat y gestión de hilos
+│   ├── src/                 # Componentes, servicios API y tipos
+│   └── README.md            # Guía para probar en Expo Go o compilar APK
 └── requirements.txt
 ```
 

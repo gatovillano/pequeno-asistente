@@ -18,17 +18,39 @@ from pequeno_asistente.agent.memory import MemoryManager
 from pequeno_asistente.agent.thread_manager import ThreadManager
 from pequeno_asistente.mcp_client.manager import MCPManager
 from pequeno_asistente.agent.core import AgentCore
-from pequeno_asistente.ui.tray import send_toggle_command, send_new_thread_command, ToggleSocketServer
+from pequeno_asistente.ui.tray import send_toggle_command, send_new_thread_command, send_quit_command, ToggleSocketServer
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("pequeno_asistente")
 
 def main():
+    # Handle --quit / -q command line arguments
+    if "--quit" in sys.argv or "-q" in sys.argv:
+        if send_quit_command():
+            logger.info("Sent quit command to running assistant instance.")
+            sys.exit(0)
+        else:
+            logger.info("No running assistant instance found.")
+            sys.exit(0)
+
     # Handle --new-thread / -n command line arguments
     if "--new-thread" in sys.argv or "-n" in sys.argv or "--new" in sys.argv:
         if send_new_thread_command():
             sys.exit(0)
+
+    # Handle --server / -s command line arguments to run headless FastAPI server
+    if "--server" in sys.argv or "-s" in sys.argv:
+        from pequeno_asistente.server import run_server
+        port = None
+        host = None
+        for i, arg in enumerate(sys.argv):
+            if arg == "--port" and i + 1 < len(sys.argv):
+                port = int(sys.argv[i + 1])
+            elif arg == "--host" and i + 1 < len(sys.argv):
+                host = sys.argv[i + 1]
+        run_server(host=host, port=port)
+        sys.exit(0)
 
     # Handle --toggle or --show command line arguments
     if "--toggle" in sys.argv or "-t" in sys.argv:
@@ -74,6 +96,7 @@ def main():
     def on_activate(application):
         nonlocal main_window
         if not main_window:
+            application.hold()  # Keeps application alive when window is hidden
             main_window = MainWindow(
                 app=application,
                 config_manager=config_manager,
@@ -117,13 +140,20 @@ def main():
             main_window.present()
             main_window._on_new_thread()
 
+    def handle_quit():
+        if main_window:
+            main_window.quit_app()
+        else:
+            app.quit()
+
     socket_server = ToggleSocketServer(
         on_toggle=handle_toggle,
         on_show=handle_show,
         on_hide=handle_hide,
         on_settings=handle_settings,
         on_clear=handle_clear,
-        on_new_thread=handle_new_thread
+        on_new_thread=handle_new_thread,
+        on_quit=handle_quit
     )
     socket_server.start()
 

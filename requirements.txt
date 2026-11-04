@@ -4,4 +4,13 @@ pydantic>=2.0.0
 python-dotenv>=1.0.0
 faster-whisper>=1.0.0
 numpy
+pyte>=0.8.2
+wcwidth>=0.2.0
+httpx
+requests
+PyGObject
+pycairo
+fastapi>=0.110.0
+uvicorn>=0.28.0
+sse-starlette>=2.0.0
 

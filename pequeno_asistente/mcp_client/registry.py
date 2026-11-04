@@ -39,7 +39,12 @@ OFFICIAL_SERVERS = [
         "qualifiedName": "@modelcontextprotocol/server-filesystem",
         "description": "Lectura, escritura y búsqueda segura de archivos locales en rutas permitidas.",
         "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/gato/Proyectos", "/home/gato/Documentos"],
+        "args": [
+            "-y",
+            "@modelcontextprotocol/server-filesystem",
+            str(Path.home() / "Proyectos"),
+            str(Path.home() / "Documentos"),
+        ],
         "transport": "stdio",
         "env": {},
         "category": "Escritorio & Sistema",
@@ -87,7 +92,7 @@ OFFICIAL_SERVERS = [
         "qualifiedName": "mcp-server-sqlite",
         "description": "Interacción y consultas SQL en bases de datos SQLite locales.",
         "command": "uvx",
-        "args": ["mcp-server-sqlite", "--db-path", "/home/gato/.config/pequeno-asistente/asistente.db"],
+        "args": ["mcp-server-sqlite", "--db-path", str(Path.home() / ".config" / "pequeno-asistente" / "asistente.db")],
         "transport": "stdio",
         "env": {},
         "category": "Desarrollo & Código",
@@ -178,11 +183,11 @@ class RegistryClient:
                         disp_name = s.get("displayName") or s.get("name") or qname
                         desc = s.get("description", "")
                         use_cnt = s.get("useCount", 0)
-                        conn_url = s.get("connectionUrl")
+                        conn_url = s.get("connectionUrl") or s.get("deploymentUrl") or s.get("url")
 
-                        # If remote SSE URL is provided, prefer sse transport, else stdio with smithery run
+                        # If remote URL is provided, use remote transport (auto-detecting SSE vs Streamable HTTP)
                         if conn_url:
-                            transport = "sse"
+                            transport = "sse" if str(conn_url).rstrip("/").endswith("/sse") else "auto"
                             command = conn_url
                             args = []
                         else:
@@ -191,7 +196,7 @@ class RegistryClient:
                             args = ["-y", "@smithery/cli@latest", "run", qname, "--config", "{}"]
 
                         safe_id = "smithery-" + qname.replace("/", "-").replace("@", "").lower()
-                        servers.append({
+                        entry = {
                             "id": safe_id,
                             "name": disp_name,
                             "qualifiedName": qname,
@@ -203,7 +208,12 @@ class RegistryClient:
                             "source": "Smithery Registry",
                             "useCount": use_cnt,
                             "category": "Comunidad & Smithery"
-                        })
+                        }
+                        if conn_url:
+                            entry["url"] = conn_url
+                        if isinstance(s.get("headers"), dict):
+                            entry["headers"] = s["headers"]
+                        servers.append(entry)
         except Exception as e:
             logger.warning(f"Error querying Smithery API: {e}")
 
@@ -223,18 +233,28 @@ class RegistryClient:
                     raw_list = data if isinstance(data, list) else data.get("servers", [])
                     for idx, s in enumerate(raw_list):
                         sid = s.get("id") or f"custom-{idx}"
-                        servers.append({
+                        s_url = s.get("url") or s.get("serverUrl") or s.get("endpoint") or ""
+                        s_cmd = s.get("command") or (s_url if s_url else "npx")
+                        s_transport = s.get("transport") or s.get("type") or ("auto" if s_url else "stdio")
+                        entry = {
                             "id": sid,
                             "name": s.get("name", sid),
                             "qualifiedName": s.get("qualifiedName", sid),
                             "description": s.get("description", ""),
-                            "transport": s.get("transport", "stdio"),
-                            "command": s.get("command", "npx"),
+                            "transport": s_transport,
+                            "command": s_cmd,
                             "args": s.get("args", []),
                             "env": s.get("env", {}),
                             "source": "Repositorio Personalizado",
                             "category": s.get("category", "Personalizado")
-                        })
+                        }
+                        if s_url:
+                            entry["url"] = s_url
+                        if isinstance(s.get("headers"), dict):
+                            entry["headers"] = s["headers"]
+                        if s.get("api_key"):
+                            entry["api_key"] = s["api_key"]
+                        servers.append(entry)
         except Exception as e:
             logger.warning(f"Error fetching custom registry {registry_url}: {e}")
         return servers

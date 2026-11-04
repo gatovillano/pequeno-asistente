@@ -224,14 +224,12 @@ export default class PequenoAsistenteExtension extends Extension {
         try {
             const home = GLib.get_home_dir();
             const binWrapper = `${home}/.local/bin/pequeno-asistente`;
-            const projectScript = `${home}/Proyectos/Pequeño asistente/scripts/toggle.sh`;
 
-            let target = binWrapper;
-            if (!GLib.file_test(binWrapper, GLib.FileTest.IS_EXECUTABLE)) {
-                target = projectScript;
+            if (GLib.file_test(binWrapper, GLib.FileTest.IS_EXECUTABLE)) {
+                Gio.Subprocess.new([binWrapper, '--toggle'], Gio.SubprocessFlags.NONE);
+            } else {
+                Gio.Subprocess.new(['pequeno-asistente', '--toggle'], Gio.SubprocessFlags.SEARCH_PATH);
             }
-
-            Gio.Subprocess.new(['/bin/bash', target], Gio.SubprocessFlags.NONE);
         } catch (err) {
             console.error(`[Pequeño Asistente] Failed to launch: ${err.message}`);
         }

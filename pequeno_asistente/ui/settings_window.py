@@ -21,41 +21,78 @@ gi.require_version('Adw', '1')
 from gi.repository import Gtk, Adw, GLib, Pango
 
 from pequeno_asistente.config import ConfigManager
+from pequeno_asistente.mcp_client.manager import (
+    MCPManager,
+    is_remote_server_config,
+    extract_servers_from_json,
+    normalize_mcp_server_config,
+    infer_remote_transport,
+)
 from pequeno_asistente.agent.providers import PROVIDERS, PROVIDER_ENV_VARS
 from pequeno_asistente.mcp_client.catalog import MCP_CATALOG, CATALOG_CATEGORIES
 from pequeno_asistente.mcp_client.registry import RegistryClient, DEFAULT_REGISTRIES
-from pequeno_asistente.agent.memory import MemoryManager
+from pequeno_asistente.agent.memory import MemoryManager, DEFAULT_HEARTBEAT_MD
 from pequeno_asistente.agent.model_fetcher import fetch_provider_models, validate_api_key, get_cached_models
+from pequeno_asistente.agent.heartbeat import HeartbeatManager, AUTOMATION_PRESETS, format_schedule_badge
+from pequeno_asistente.agent.skills_manager import SkillManager, SkillInfo
+from pequeno_asistente.ui.automation_dialog import AutomationEditorDialog
+from pequeno_asistente.ui.skill_dialogs import SkillInstallDialog, SkillViewerDialog
 
 class SettingsWindow(Adw.PreferencesWindow):
     def __init__(
         self,
         config_manager: ConfigManager,
         memory_manager: MemoryManager,
-        on_sync_needed: Optional[Callable[[], None]] = None,
+        mcp_manager: Optional[MCPManager] = None,
+        on_sync_needed: Optional[Callable[..., None]] = None,
         on_model_changed: Optional[Callable[[str], None]] = None,
-        on_audio_changed: Optional[Callable[[], None]] = None
+        on_audio_changed: Optional[Callable[[], None]] = None,
+        on_theme_changed: Optional[Callable[[str], None]] = None
     ):
         super().__init__()
         self.config_manager = config_manager
         self.memory_manager = memory_manager
-        self.on_sync_needed = on_sync_needed or (lambda: None)
+        self.mcp_manager = mcp_manager
+        self.on_sync_needed = on_sync_needed or (lambda *args, **kwargs: None)
         self.on_model_changed = on_model_changed or (lambda m: None)
         self.on_audio_changed = on_audio_changed or (lambda: None)
+        self.on_theme_changed = on_theme_changed or (lambda t: None)
 
         self.set_title("Configuración - Pequeño Asistente")
         self.set_default_size(780, 680)
         self.set_modal(True)
+        if not Adw.StyleManager.get_default().get_dark():
+            self.add_css_class("theme-light")
 
         # State for model explorer
         self.current_provider_models: List[Dict[str, Any]] = []
         self.search_filter_text = ""
         self.registry_client = RegistryClient()
+        self._catalog_rows: Dict[str, Dict[str, Any]] = {}
+        self._syncing_switches = False
+        self._shb_auto_rows: List[Any] = []
+        self._shb_logs_rows: List[Any] = []
+
+        # Heartbeat manager reference & live updates
+        self.hb_manager = HeartbeatManager.get_instance()
+        if self.hb_manager:
+            self._hb_listener = lambda: GLib.idle_add(self._refresh_settings_hb_ui)
+            self.hb_manager.add_listener(self._hb_listener)
+
+        # Skill manager reference & live updates
+        self.skill_manager = SkillManager.get_instance(self.config_manager)
+        self._skills_listener = lambda: GLib.idle_add(self._refresh_skills_list)
+        self.skill_manager.add_listener(self._skills_listener)
+        self._skills_rows_widgets: List[Any] = []
+
+        self.connect("close-request", self._on_settings_close)
 
         # Build pages
         self._build_models_page()
         self._build_api_keys_page()
         self._build_mcp_catalog_page()
+        self._build_skills_page()
+        self._build_heartbeats_page()
         self._build_audio_page()
         self._build_memory_page()
         self._build_desktop_integration_page()
@@ -519,18 +556,31 @@ class SettingsWindow(Adw.PreferencesWindow):
         search_grp.add(reg_list_row)
         page.add(search_grp)
 
-        # 3. Local & Configured Servers Group
+        # 3. Local & Remote Configured Servers Group
         self.local_grp = Adw.PreferencesGroup()
-        self.local_grp.set_title("Servidores Instalados y Configurados")
-        self.local_grp.set_description("Servidores activos en tu configuración local. Activa o desactiva con los interruptores o añade nuevos.")
+        self.local_grp.set_title("Servidores Instalados y Configurados (Locales y Remotos)")
+        self.local_grp.set_description("Servidores MCP locales (stdio) y remotos (Streamable HTTP / SSE) en tu configuración.")
 
-        add_custom_btn = Gtk.Button(label="+ Añadir Servidor Local")
+        header_actions_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+
+        refresh_btn = Gtk.Button(icon_name="view-refresh-symbolic")
+        refresh_btn.set_tooltip_text("Comprobar conexión y reconectar servidores MCP")
+        refresh_btn.add_css_class("flat")
+        refresh_btn.connect("clicked", lambda _b: self._on_reconnect_clicked(refresh_btn))
+
+        add_custom_btn = Gtk.Button(label="+ Añadir Servidor MCP")
         add_custom_btn.add_css_class("suggested-action")
         add_custom_btn.connect("clicked", self._open_add_custom_mcp_dialog)
-        
-        local_header_row = Adw.ActionRow(title="Servidores Configurados", subtitle="Comandos locales o URLs remotas del asistente")
-        local_header_row.add_suffix(add_custom_btn)
-        self.local_grp.add(local_header_row)
+
+        header_actions_box.append(refresh_btn)
+        header_actions_box.append(add_custom_btn)
+
+        self.local_header_row = Adw.ActionRow(
+            title="Servidores Configurados",
+            subtitle="Comandos locales (stdio) o servidores remotos (Streamable HTTP / SSE)"
+        )
+        self.local_header_row.add_suffix(header_actions_box)
+        self.local_grp.add(self.local_header_row)
         page.add(self.local_grp)
 
         self._local_server_rows = []
@@ -555,6 +605,164 @@ class SettingsWindow(Adw.PreferencesWindow):
 
         self.add(page)
 
+    def _update_mcp_status_pill(self, label: Gtk.Label, server_id: str, is_active: bool) -> Tuple[str, Optional[str], int]:
+        """
+        Updates a Gtk.Label with the appropriate status text, CSS class, and tooltip.
+        Returns (status_text, error_detail, tools_count).
+        """
+        for c in ["status-pill", "status-pill-connected", "status-pill-connecting", "status-pill-error", "status-pill-disconnected"]:
+            label.remove_css_class(c)
+
+        if not is_active:
+            status_text = "⚪ Desactivado"
+            css_class = "status-pill-disconnected"
+            tooltip_text = f"El servidor '{server_id}' está desactivado."
+            label.set_text(status_text)
+            label.add_css_class(css_class)
+            label.set_tooltip_text(tooltip_text)
+            return status_text, None, 0
+
+        if not self.mcp_manager:
+            status_text = "⚪ Desconectado"
+            css_class = "status-pill-disconnected"
+            tooltip_text = "Gestor MCP no disponible."
+            label.set_text(status_text)
+            label.add_css_class(css_class)
+            label.set_tooltip_text(tooltip_text)
+            return status_text, None, 0
+
+        inst = self.mcp_manager.instances.get(server_id)
+        if not inst:
+            status_text = "⚪ Desconectado"
+            css_class = "status-pill-disconnected"
+            tooltip_text = f"El servidor '{server_id}' no está iniciado."
+            label.set_text(status_text)
+            label.add_css_class(css_class)
+            label.set_tooltip_text(tooltip_text)
+            return status_text, None, 0
+
+        if inst.status == "connected":
+            tools_count = len(inst.tools)
+            status_text = f"🟢 Conectado ({tools_count})" if tools_count > 0 else "🟢 Conectado"
+            css_class = "status-pill-connected"
+            tool_names = [t.name for t in inst.tools[:8]]
+            names_preview = ", ".join(tool_names)
+            if len(inst.tools) > 8:
+                names_preview += f"... (+{len(inst.tools) - 8} más)"
+            tooltip_text = f"Conectado exitosamente.\nHerramientas ({tools_count}): {names_preview or 'ninguna'}"
+            label.set_text(status_text)
+            label.add_css_class(css_class)
+            label.set_tooltip_text(tooltip_text)
+            return status_text, None, tools_count
+
+        elif inst.status == "connecting":
+            status_text = "🟡 Conectando..."
+            css_class = "status-pill-connecting"
+            tooltip_text = f"Intentando conectar al servidor '{server_id}'..."
+            label.set_text(status_text)
+            label.add_css_class(css_class)
+            label.set_tooltip_text(tooltip_text)
+            return status_text, None, 0
+
+        elif inst.status == "error":
+            status_text = "🔴 Error"
+            css_class = "status-pill-error"
+            error_detail = inst.error_message or "Error desconocido al conectar"
+            tooltip_text = f"Error de conexión en '{server_id}':\n{error_detail}"
+            label.set_text(status_text)
+            label.add_css_class(css_class)
+            label.set_tooltip_text(tooltip_text)
+            return status_text, error_detail, 0
+
+        else:
+            status_text = "⚪ Desconectado"
+            css_class = "status-pill-disconnected"
+            tooltip_text = f"Estado: {inst.status}"
+            label.set_text(status_text)
+            label.add_css_class(css_class)
+            label.set_tooltip_text(tooltip_text)
+            return status_text, None, 0
+
+    def _update_local_header_summary(self):
+        if not hasattr(self, "local_header_row"):
+            return
+        servers = self.config_manager.get_mcp_servers()
+        total = len(servers)
+        if total == 0:
+            self.local_header_row.set_subtitle("No hay servidores configurados")
+            return
+
+        connected_count = 0
+        error_count = 0
+        disabled_count = 0
+        total_tools = 0
+
+        if self.mcp_manager:
+            for sid, scfg in servers.items():
+                if scfg.get("disabled", False):
+                    disabled_count += 1
+                    continue
+                inst = self.mcp_manager.instances.get(sid)
+                if inst:
+                    if inst.status == "connected":
+                        connected_count += 1
+                        total_tools += len(inst.tools)
+                    elif inst.status == "error":
+                        error_count += 1
+        else:
+            for sid, scfg in servers.items():
+                if scfg.get("disabled", False):
+                    disabled_count += 1
+
+        parts = []
+        if connected_count > 0:
+            parts.append(f"🟢 {connected_count} conectados")
+        if error_count > 0:
+            parts.append(f"🔴 {error_count} con error")
+        if disabled_count > 0:
+            parts.append(f"⚪ {disabled_count} desactivados")
+        if total_tools > 0:
+            parts.append(f"{total_tools} herramientas")
+
+        if parts:
+            self.local_header_row.set_subtitle(" · ".join(parts))
+        else:
+            self.local_header_row.set_subtitle(f"{total - disabled_count} de {total} servidores activos")
+
+    def _on_reconnect_clicked(self, btn: Gtk.Button):
+        btn.set_sensitive(False)
+        if hasattr(self, "local_header_row"):
+            self.local_header_row.set_subtitle("Comprobando conexiones y reconectando...")
+        self.on_sync_needed(force=True)
+        GLib.timeout_add(1500, lambda: btn.set_sensitive(True) or False)
+
+    def refresh_mcp_status(self):
+        """Refreshes all MCP connection status indicators and summaries."""
+        self._refresh_mcp_servers_list()
+
+    def _refresh_catalog_status(self):
+        if not hasattr(self, "_catalog_rows"):
+            return
+        active_servers = self.config_manager.get_mcp_servers()
+        self._syncing_switches = True
+        try:
+            for server_id, item in self._catalog_rows.items():
+                badge = item.get("badge")
+                switch = item.get("switch")
+                if not badge or not switch:
+                    continue
+                is_configured = server_id in active_servers
+                is_active = is_configured and not active_servers[server_id].get("disabled", False)
+                if switch.get_active() != is_active:
+                    switch.set_active(is_active)
+                if not is_configured:
+                    badge.set_visible(False)
+                else:
+                    badge.set_visible(True)
+                    self._update_mcp_status_pill(badge, server_id, is_active)
+        finally:
+            self._syncing_switches = False
+
     def _refresh_mcp_servers_list(self):
         """Re-renders the list of all currently configured local servers."""
         for row in self._local_server_rows:
@@ -569,6 +777,8 @@ class SettingsWindow(Adw.PreferencesWindow):
             )
             self.local_grp.add(empty_row)
             self._local_server_rows.append(empty_row)
+            self._update_local_header_summary()
+            self._refresh_catalog_status()
             return
 
         for sid, scfg in servers.items():
@@ -576,21 +786,53 @@ class SettingsWindow(Adw.PreferencesWindow):
             self.local_grp.add(row)
             self._local_server_rows.append(row)
 
+        self._update_local_header_summary()
+        self._refresh_catalog_status()
+
     def _create_local_server_row(self, server_id: str, scfg: Dict[str, Any]) -> Adw.ActionRow:
         row = Adw.ActionRow()
         name = scfg.get("name") or server_id
         cmd = scfg.get("command", "")
+        url = scfg.get("url") or (cmd if str(cmd).startswith(("http://", "https://")) else "")
         args_str = " ".join(str(a) for a in scfg.get("args", []))
         transport = scfg.get("transport", "stdio")
         is_disabled = scfg.get("disabled", False)
+        is_remote = is_remote_server_config(scfg)
 
-        icon = "🧩"
+        icon = "🌐" if is_remote else "🧩"
         if server_id in MCP_CATALOG:
-            icon = MCP_CATALOG[server_id].get("icon", "🧩")
+            icon = MCP_CATALOG[server_id].get("icon", icon)
 
         row.set_title(html.escape(f"{icon} {name} ({server_id})"))
-        cmd_preview = f"{cmd} {args_str}".strip()
-        row.set_subtitle(html.escape(f"Comando: {cmd_preview} | Transporte: {transport}"))
+        cmd_preview = url if is_remote else f"{cmd} {args_str}".strip()
+
+        # Check negotiated transport if connected
+        effective_transport = transport
+        if self.mcp_manager and server_id in self.mcp_manager.instances:
+            inst = self.mcp_manager.instances[server_id]
+            if getattr(inst, "active_transport", None):
+                effective_transport = inst.active_transport
+
+        has_auth = bool(scfg.get("api_key") or scfg.get("headers"))
+        auth_tag = " · 🔒 Auth" if (is_remote and has_auth) else ""
+        endpoint_prefix = "URL" if is_remote else "Comando"
+
+        # Status badge
+        status_label = Gtk.Label()
+        status_label.set_valign(Gtk.Align.CENTER)
+        status_text, error_detail, tools_count = self._update_mcp_status_pill(
+            status_label, server_id, not is_disabled
+        )
+
+        if error_detail:
+            err_line = error_detail.splitlines()[0] if error_detail else "Error"
+            if len(err_line) > 65:
+                err_line = err_line[:62] + "..."
+            row.set_subtitle(html.escape(f"⚠️ Error: {err_line} | {cmd_preview}"))
+        elif tools_count > 0:
+            row.set_subtitle(html.escape(f"{endpoint_prefix}: {cmd_preview} | Transporte: {effective_transport}{auth_tag} | {tools_count} herramientas"))
+        else:
+            row.set_subtitle(html.escape(f"{endpoint_prefix}: {cmd_preview} | Transporte: {effective_transport}{auth_tag}"))
 
         # Delete button
         del_btn = Gtk.Button(icon_name="user-trash-symbolic")
@@ -608,7 +850,7 @@ class SettingsWindow(Adw.PreferencesWindow):
         # Config / Edit button
         cfg_btn = Gtk.Button(icon_name="document-properties-symbolic")
         cfg_btn.add_css_class("flat")
-        cfg_btn.set_tooltip_text("Editar comando y variables")
+        cfg_btn.set_tooltip_text("Editar comando, URL, cabeceras y variables")
         cfg_btn.connect("clicked", lambda _b: self._open_edit_mcp_dialog(server_id, scfg))
 
         # Switch toggle
@@ -617,12 +859,17 @@ class SettingsWindow(Adw.PreferencesWindow):
         switch.set_valign(Gtk.Align.CENTER)
 
         def on_switch_toggled(sw, _param):
+            if getattr(self, "_syncing_switches", False):
+                return
             active = sw.get_active()
             self.config_manager.toggle_mcp_server(server_id, active)
+            self._update_mcp_status_pill(status_label, server_id, active)
             self.on_sync_needed()
+            self._update_local_header_summary()
 
         switch.connect("notify::active", on_switch_toggled)
 
+        row.add_suffix(status_label)
         row.add_suffix(cfg_btn)
         row.add_suffix(del_btn)
         row.add_suffix(switch)
@@ -734,14 +981,17 @@ class SettingsWindow(Adw.PreferencesWindow):
 
     def _install_registry_server(self, server_info: Dict[str, Any]):
         sid = server_info["id"]
-        cfg = {
+        cfg = normalize_mcp_server_config({
             "name": server_info.get("name", sid),
-            "command": server_info.get("command", "npx"),
+            "command": server_info.get("command", ""),
+            "url": server_info.get("url", ""),
             "args": server_info.get("args", []),
             "transport": server_info.get("transport", "stdio"),
+            "headers": server_info.get("headers", {}),
+            "api_key": server_info.get("api_key", ""),
             "env": server_info.get("env", {}),
             "disabled": False
-        }
+        }, fallback_name=sid)
         self.config_manager.set_mcp_server(sid, cfg)
         self.on_sync_needed()
         self._refresh_mcp_servers_list()
@@ -752,27 +1002,52 @@ class SettingsWindow(Adw.PreferencesWindow):
         row.set_subtitle(html.escape(info.get("description", "")))
 
         active_servers = self.config_manager.get_mcp_servers()
-        is_active = (server_id in active_servers) and not active_servers[server_id].get("disabled", False)
+        is_configured = server_id in active_servers
+        is_active = is_configured and not active_servers[server_id].get("disabled", False)
+
+        # Status badge
+        badge = Gtk.Label()
+        badge.set_valign(Gtk.Align.CENTER)
+        self._update_mcp_status_pill(badge, server_id, is_active)
+        if not is_configured:
+            badge.set_visible(False)
 
         # Switch toggle
         switch = Gtk.Switch()
         switch.set_active(is_active)
         switch.set_valign(Gtk.Align.CENTER)
 
+        # Track for live status sync
+        self._catalog_rows[server_id] = {
+            "row": row,
+            "badge": badge,
+            "switch": switch,
+            "info": info
+        }
+
         def on_switch_toggled(sw, _param):
+            if getattr(self, "_syncing_switches", False):
+                return
             active = sw.get_active()
             if active:
-                cfg_entry = {
+                cfg_entry = normalize_mcp_server_config({
                     "name": info["name"],
-                    "command": info["command"],
-                    "args": info["args"],
+                    "command": info.get("command", ""),
+                    "url": info.get("url", ""),
+                    "args": info.get("args", []),
                     "transport": info.get("transport", "stdio"),
+                    "headers": info.get("headers", {}),
+                    "api_key": info.get("api_key", ""),
                     "env": info.get("env", {}),
                     "disabled": False
-                }
+                }, fallback_name=server_id)
                 self.config_manager.set_mcp_server(server_id, cfg_entry)
+                badge.set_visible(True)
+                self._update_mcp_status_pill(badge, server_id, True)
             else:
                 self.config_manager.toggle_mcp_server(server_id, False)
+                self._update_mcp_status_pill(badge, server_id, False)
+
             self.on_sync_needed()
             self._refresh_mcp_servers_list()
 
@@ -781,17 +1056,18 @@ class SettingsWindow(Adw.PreferencesWindow):
         # Config button
         cfg_btn = Gtk.Button(icon_name="document-properties-symbolic")
         cfg_btn.add_css_class("flat")
-        cfg_btn.set_tooltip_text("Editar comando y variables")
+        cfg_btn.set_tooltip_text("Editar comando, URL, cabeceras y variables")
         cfg_btn.connect("clicked", lambda _b: self._open_edit_mcp_dialog(server_id, info))
 
+        row.add_suffix(badge)
         row.add_suffix(cfg_btn)
         row.add_suffix(switch)
         return row
 
     def _open_edit_mcp_dialog(self, server_id: str, info: Dict[str, Any]):
         dialog = Adw.Window(transient_for=self, modal=True)
-        dialog.set_title(f"Configurar {info['name']}")
-        dialog.set_default_size(500, 420)
+        dialog.set_title(f"Configurar {info.get('name', server_id)}")
+        dialog.set_default_size(560, 560)
 
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         box.set_margin_top(16)
@@ -800,54 +1076,192 @@ class SettingsWindow(Adw.PreferencesWindow):
         box.set_margin_end(16)
 
         active_cfg = self.config_manager.get_mcp_servers().get(server_id, info)
+        is_disabled = active_cfg.get("disabled", False)
+        is_remote_init = is_remote_server_config(active_cfg)
 
-        cmd_entry = Adw.EntryRow(title="Comando")
-        cmd_entry.set_text(active_cfg.get("command", ""))
-        
+        # Status Banner
+        status_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        status_box.set_margin_bottom(4)
+        status_badge = Gtk.Label()
+        status_badge.set_valign(Gtk.Align.CENTER)
+        status_text, error_detail, tools_count = self._update_mcp_status_pill(
+            status_badge, server_id, not is_disabled
+        )
+        status_box.append(status_badge)
+
+        status_info_label = Gtk.Label(xalign=0, wrap=True)
+        status_info_label.set_hexpand(True)
+        if error_detail:
+            status_info_label.set_markup(f"<span foreground='#f38ba8'><b>Error:</b> {html.escape(error_detail)}</span>")
+        elif tools_count > 0:
+            status_info_label.set_markup(f"<span foreground='#a6adc8'>{tools_count} herramientas disponibles para el asistente.</span>")
+        elif not is_disabled:
+            status_info_label.set_markup("<span foreground='#a6adc8'>Servidor configurado.</span>")
+        else:
+            status_info_label.set_markup("<span foreground='#6c7086'>Servidor desactivado.</span>")
+        status_box.append(status_info_label)
+        box.append(status_box)
+
+        transport_options = [
+            ("stdio", "Local — Comando (stdio)"),
+            ("auto", "Remoto — Auto-detectar (Streamable HTTP / SSE)"),
+            ("streamable_http", "Remoto — Streamable HTTP (POST/SSE moderno)"),
+            ("sse", "Remoto — SSE (Server-Sent Events)"),
+        ]
+        transport_keys = [t[0] for t in transport_options]
+        transport_labels = [t[1] for t in transport_options]
+
+        curr_transport = str(active_cfg.get("transport", "stdio")).strip().lower()
+        if is_remote_init and curr_transport == "stdio":
+            curr_transport = infer_remote_transport(active_cfg.get("url") or active_cfg.get("command", ""))
+        elif curr_transport in ("streamable-http", "http"):
+            curr_transport = "streamable_http"
+
+        t_idx = transport_keys.index(curr_transport) if curr_transport in transport_keys else 0
+        transport_row = Adw.ComboRow(
+            title="Tipo de Transporte",
+            model=Gtk.StringList.new(transport_labels)
+        )
+        transport_row.set_selected(t_idx)
+
+        cmd_entry = Adw.EntryRow(title="Comando (stdio)")
+        cmd_entry.set_text(active_cfg.get("command", "") if not is_remote_init else "")
+
         args_entry = Adw.EntryRow(title="Argumentos (separados por espacio)")
-        args_entry.set_text(" ".join(active_cfg.get("args", [])))
+        args_entry.set_text(" ".join(str(a) for a in active_cfg.get("args", [])))
+
+        url_entry = Adw.EntryRow(title="URL del Servidor Remoto (https://...)")
+        initial_url = active_cfg.get("url") or (active_cfg.get("command", "") if is_remote_init else "")
+        url_entry.set_text(initial_url)
+
+        api_key_entry = Adw.PasswordEntryRow(title="Token Bearer / API Key (Opcional)")
+        api_key_entry.set_text(active_cfg.get("api_key", ""))
+
+        headers_entry = Adw.EntryRow(title="Cabeceras HTTP Adicionales (JSON)")
+        headers_entry.set_text(json.dumps(active_cfg.get("headers", {})))
 
         env_entry = Adw.EntryRow(title="Variables de Entorno (JSON)")
         env_entry.set_text(json.dumps(active_cfg.get("env", {})))
 
+        def _sync_edit_transport_fields(*_):
+            idx = transport_row.get_selected()
+            sel_key = transport_keys[idx] if 0 <= idx < len(transport_keys) else "stdio"
+            remote_mode = sel_key != "stdio"
+            cmd_entry.set_visible(not remote_mode)
+            args_entry.set_visible(not remote_mode)
+            url_entry.set_visible(remote_mode)
+            api_key_entry.set_visible(remote_mode)
+            headers_entry.set_visible(remote_mode)
+
+        transport_row.connect("notify::selected", _sync_edit_transport_fields)
+        _sync_edit_transport_fields()
+
         pref_grp = Adw.PreferencesGroup()
+        pref_grp.add(transport_row)
         pref_grp.add(cmd_entry)
         pref_grp.add(args_entry)
+        pref_grp.add(url_entry)
+        pref_grp.add(api_key_entry)
+        pref_grp.add(headers_entry)
         pref_grp.add(env_entry)
         box.append(pref_grp)
 
-        save_btn = Gtk.Button(label="Guardar Configuración")
-        save_btn.add_css_class("suggested-action")
-        
-        def save_and_close(_b):
+        test_status_lbl = Gtk.Label(xalign=0, wrap=True)
+        test_status_lbl.add_css_class("system-notice")
+        box.append(test_status_lbl)
+
+        btn_row_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+        def _build_draft_cfg() -> Dict[str, Any]:
+            idx = transport_row.get_selected()
+            sel_transport = transport_keys[idx] if 0 <= idx < len(transport_keys) else "stdio"
             try:
-                env_dict = json.loads(env_entry.get_text()) if env_entry.get_text() else {}
+                env_dict = json.loads(env_entry.get_text()) if env_entry.get_text().strip() else {}
             except Exception:
                 env_dict = {}
+            try:
+                hdr_dict = json.loads(headers_entry.get_text()) if headers_entry.get_text().strip() else {}
+            except Exception:
+                hdr_dict = {}
 
             args_list = [a for a in args_entry.get_text().split(" ") if a.strip()]
-            new_cfg = {
-                "name": info["name"],
-                "command": cmd_entry.get_text().strip(),
-                "args": args_list,
-                "transport": active_cfg.get("transport", "stdio"),
+            remote_mode = sel_transport != "stdio"
+            url_val = url_entry.get_text().strip() if remote_mode else ""
+            cmd_val = url_val if remote_mode else cmd_entry.get_text().strip()
+
+            return normalize_mcp_server_config({
+                "name": info.get("name", server_id),
+                "command": cmd_val,
+                "url": url_val,
+                "args": [] if remote_mode else args_list,
+                "transport": sel_transport,
+                "headers": hdr_dict if remote_mode else {},
+                "api_key": api_key_entry.get_text().strip() if remote_mode else "",
                 "env": env_dict,
                 "disabled": active_cfg.get("disabled", False)
-            }
+            }, fallback_name=server_id)
+
+        test_btn = Gtk.Button(label="🧪 Probar Conexión")
+        def on_test_conn(_b):
+            draft = _build_draft_cfg()
+            test_btn.set_sensitive(False)
+            test_status_lbl.set_text("⏳ Probando conexión con el servidor MCP...")
+
+            def _worker():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    res = loop.run_until_complete(MCPManager.test_server_connection(draft, server_id=server_id))
+                except Exception as ex:
+                    res = {"ok": False, "error": str(ex), "tools_count": 0}
+                finally:
+                    loop.close()
+
+                def _done():
+                    test_btn.set_sensitive(True)
+                    if res.get("ok"):
+                        t_cnt = res.get("tools_count", 0)
+                        t_mode = res.get("transport", draft.get("transport"))
+                        preview = ", ".join(res.get("tools", [])[:5])
+                        extra = f" ({preview})" if preview else ""
+                        test_status_lbl.set_markup(
+                            f"<span foreground='#a6e3a1'>✅ Conectado ({html.escape(str(t_mode))}): {t_cnt} herramientas descubiertas{html.escape(extra)}</span>"
+                        )
+                    else:
+                        err_txt = res.get("error") or "Error al conectar"
+                        test_status_lbl.set_markup(
+                            f"<span foreground='#f38ba8'>❌ Error: {html.escape(str(err_txt))}</span>"
+                        )
+                    return False
+
+                GLib.idle_add(_done)
+
+            threading.Thread(target=_worker, daemon=True).start()
+
+        test_btn.connect("clicked", on_test_conn)
+        btn_row_box.append(test_btn)
+
+        save_btn = Gtk.Button(label="Guardar Configuración")
+        save_btn.add_css_class("suggested-action")
+        save_btn.set_hexpand(True)
+
+        def save_and_close(_b):
+            new_cfg = _build_draft_cfg()
             self.config_manager.set_mcp_server(server_id, new_cfg)
-            self.on_sync_needed()
+            self.on_sync_needed(force=True)
             self._refresh_mcp_servers_list()
             dialog.close()
 
         save_btn.connect("clicked", save_and_close)
-        box.append(save_btn)
+        btn_row_box.append(save_btn)
+        box.append(btn_row_box)
         dialog.set_content(box)
         dialog.present()
 
     def _open_add_custom_mcp_dialog(self, _btn):
         dialog = Adw.Window(transient_for=self, modal=True)
-        dialog.set_title("Añadir Servidor MCP (Local / Personalizado)")
-        dialog.set_default_size(580, 520)
+        dialog.set_title("Añadir Servidor MCP (Local o Remoto)")
+        dialog.set_default_size(620, 580)
 
         main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         main_box.set_margin_top(12)
@@ -860,26 +1274,19 @@ class SettingsWindow(Adw.PreferencesWindow):
 
         # --- TAB 1: PEGAR JSON COMPLETO ---
         json_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        
+
         json_info = Gtk.Label(
-            label="Pega la configuración completa en formato JSON (compatible con Claude Desktop <i>{\"mcpServers\": ...}</i> o definición de servidor directa):",
+            label="Pega la configuración en formato JSON (compatible con Claude Desktop, Cursor y VS Code: soporta servidores locales con <i>\"command\"</i> y remotos con <i>\"url\"</i> y <i>\"headers\"</i>):",
             use_markup=True,
             wrap=True,
             xalign=0
         )
         json_box.append(json_info)
 
-        json_scrolled = Gtk.ScrolledWindow()
-        json_scrolled.set_min_content_height(220)
-        json_scrolled.set_max_content_height(300)
-        json_scrolled.add_css_class("chat-input")
-
-        json_textview = Gtk.TextView(wrap_mode=Gtk.WrapMode.NONE)
-        json_textview.set_monospace(True)
-        sample_json = (
+        sample_local_json = (
             '{\n'
             '  "mcpServers": {\n'
-            '    "mi-servidor": {\n'
+            '    "mi-servidor-local": {\n'
             '      "command": "uvx",\n'
             '      "args": ["weather-mcp"],\n'
             '      "env": {}\n'
@@ -887,37 +1294,48 @@ class SettingsWindow(Adw.PreferencesWindow):
             '  }\n'
             '}'
         )
-        json_textview.get_buffer().set_text(sample_json)
+        sample_remote_json = (
+            '{\n'
+            '  "mcpServers": {\n'
+            '    "mi-servidor-remoto": {\n'
+            '      "url": "https://ejemplo.com/mcp",\n'
+            '      "transport": "streamable_http",\n'
+            '      "headers": {\n'
+            '        "Authorization": "Bearer TU_API_KEY"\n'
+            '      }\n'
+            '    }\n'
+            '  }\n'
+            '}'
+        )
+
+        tpl_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        tpl_local_btn = Gtk.Button(label="💻 Plantilla Local (stdio)")
+        tpl_local_btn.add_css_class("flat")
+        tpl_remote_btn = Gtk.Button(label="🌐 Plantilla Remota (HTTP / SSE)")
+        tpl_remote_btn.add_css_class("flat")
+        tpl_bar.append(tpl_local_btn)
+        tpl_bar.append(tpl_remote_btn)
+        json_box.append(tpl_bar)
+
+        json_scrolled = Gtk.ScrolledWindow()
+        json_scrolled.set_min_content_height(210)
+        json_scrolled.set_max_content_height(290)
+        json_scrolled.add_css_class("chat-input")
+
+        json_textview = Gtk.TextView(wrap_mode=Gtk.WrapMode.NONE)
+        json_textview.set_monospace(True)
+        json_textview.get_buffer().set_text(sample_remote_json)
         json_scrolled.set_child(json_textview)
         json_box.append(json_scrolled)
+
+        tpl_local_btn.connect("clicked", lambda _b: json_textview.get_buffer().set_text(sample_local_json))
+        tpl_remote_btn.connect("clicked", lambda _b: json_textview.get_buffer().set_text(sample_remote_json))
 
         json_status_label = Gtk.Label(xalign=0, wrap=True)
         json_status_label.add_css_class("system-notice")
         json_box.append(json_status_label)
 
         json_btn_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-
-        # Helper to parse JSON
-        def extract_servers_from_json(text: str):
-            data = json.loads(text)
-            extracted = []
-            if "mcpServers" in data and isinstance(data["mcpServers"], dict):
-                for sid, scfg in data["mcpServers"].items():
-                    extracted.append((sid, scfg))
-            elif isinstance(data, dict):
-                if "command" in data:
-                    sid = data.get("id") or data.get("name") or "custom-mcp"
-                    extracted.append((sid, data))
-                else:
-                    for sid, scfg in data.items():
-                        if isinstance(scfg, dict) and "command" in scfg:
-                            extracted.append((sid, scfg))
-            elif isinstance(data, list):
-                for idx, item in enumerate(data):
-                    if isinstance(item, dict) and "command" in item:
-                        sid = item.get("id") or item.get("name") or f"custom-{idx}"
-                        extracted.append((sid, item))
-            return extracted
 
         import_json_btn = Gtk.Button(label="📥 Instalar desde JSON")
         import_json_btn.add_css_class("suggested-action")
@@ -928,22 +1346,14 @@ class SettingsWindow(Adw.PreferencesWindow):
             try:
                 servers = extract_servers_from_json(text)
                 if not servers:
-                    json_status_label.set_markup("<span foreground='#f38ba8'>❌ No se encontró ningún servidor con 'command' en el JSON.</span>")
+                    json_status_label.set_markup(
+                        "<span foreground='#f38ba8'>❌ No se encontró ningún servidor con 'command' o 'url' en el JSON.</span>"
+                    )
                     return
 
-                installed_count = 0
                 for sid, scfg in servers:
                     clean_id = "".join(c if c.isalnum() or c == "-" else "_" for c in sid.lower())
-                    cfg = {
-                        "name": scfg.get("name") or sid,
-                        "command": scfg.get("command", ""),
-                        "args": scfg.get("args", []),
-                        "transport": scfg.get("transport") or ("sse" if str(scfg.get("command", "")).startswith("http") else "stdio"),
-                        "env": scfg.get("env", {}),
-                        "disabled": False
-                    }
-                    self.config_manager.set_mcp_server(clean_id, cfg)
-                    installed_count += 1
+                    self.config_manager.set_mcp_server(clean_id, scfg)
 
                 self.on_sync_needed()
                 self._refresh_mcp_servers_list()
@@ -953,7 +1363,6 @@ class SettingsWindow(Adw.PreferencesWindow):
 
         import_json_btn.connect("clicked", import_from_json)
         json_btn_bar.append(import_json_btn)
-
         json_box.append(json_btn_bar)
 
         # --- TAB 2: FORMULARIO VISUAL ---
@@ -961,50 +1370,171 @@ class SettingsWindow(Adw.PreferencesWindow):
         grp = Adw.PreferencesGroup()
         grp.set_title("Campos de Configuración")
 
-        id_entry = Adw.EntryRow(title="ID único (ej: mi-herramienta)")
-        name_entry = Adw.EntryRow(title="Nombre visible (ej: Mi Servidor MCP)")
-        cmd_entry = Adw.EntryRow(title="Comando o URL (ej: uvx, npx, python, http://...)")
-        args_entry = Adw.EntryRow(title="Argumentos (ej: -y @modelcontextprotocol/server-git)")
-        env_entry = Adw.EntryRow(title="Variables de Entorno (JSON: {\"KEY\": \"VAL\"})")
+        transport_options = [
+            ("stdio", "Local — Comando (stdio)"),
+            ("auto", "Remoto — Auto-detectar (Streamable HTTP / SSE)"),
+            ("streamable_http", "Remoto — Streamable HTTP (POST/SSE moderno)"),
+            ("sse", "Remoto — SSE (Server-Sent Events)"),
+        ]
+        transport_keys = [t[0] for t in transport_options]
+        transport_labels = [t[1] for t in transport_options]
 
+        transport_row = Adw.ComboRow(
+            title="Tipo de Servidor / Transporte",
+            model=Gtk.StringList.new(transport_labels)
+        )
+        transport_row.set_selected(1)  # Default to Remote Auto-detect or user can pick Local
+
+        id_entry = Adw.EntryRow(title="ID único (ej: mi-servidor-mcp)")
+        name_entry = Adw.EntryRow(title="Nombre visible (ej: Servidor MCP Remoto)")
+
+        # Local fields
+        cmd_entry = Adw.EntryRow(title="Comando Local (ej: uvx, npx, python)")
+        args_entry = Adw.EntryRow(title="Argumentos (ej: -y @modelcontextprotocol/server-git)")
+
+        # Remote fields
+        url_entry = Adw.EntryRow(title="URL del Servidor Remoto (ej: https://.../mcp o https://.../sse)")
+        api_key_entry = Adw.PasswordEntryRow(title="Token Bearer / API Key (Opcional)")
+        headers_entry = Adw.EntryRow(title="Cabeceras HTTP Adicionales (JSON: {\"X-API-Key\": \"...\"})")
+        headers_entry.set_text("{}")
+
+        env_entry = Adw.EntryRow(title="Variables de Entorno (JSON: {\"KEY\": \"VAL\"})")
+        env_entry.set_text("{}")
+
+        def _sync_form_transport_fields(*_):
+            idx = transport_row.get_selected()
+            sel_key = transport_keys[idx] if 0 <= idx < len(transport_keys) else "stdio"
+            remote_mode = sel_key != "stdio"
+            cmd_entry.set_visible(not remote_mode)
+            args_entry.set_visible(not remote_mode)
+            url_entry.set_visible(remote_mode)
+            api_key_entry.set_visible(remote_mode)
+            headers_entry.set_visible(remote_mode)
+
+        transport_row.connect("notify::selected", _sync_form_transport_fields)
+        _sync_form_transport_fields()
+
+        grp.add(transport_row)
         grp.add(id_entry)
         grp.add(name_entry)
         grp.add(cmd_entry)
         grp.add(args_entry)
+        grp.add(url_entry)
+        grp.add(api_key_entry)
+        grp.add(headers_entry)
         grp.add(env_entry)
         form_box.append(grp)
 
-        form_save_btn = Gtk.Button(label="Añadir e Iniciar")
-        form_save_btn.add_css_class("suggested-action")
+        form_status_label = Gtk.Label(xalign=0, wrap=True)
+        form_status_label.add_css_class("system-notice")
+        form_box.append(form_status_label)
 
-        def add_from_form(_b):
+        form_actions_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+        def _build_form_cfg() -> Tuple[str, Dict[str, Any]]:
             sid = id_entry.get_text().strip()
-            if not sid:
-                return
-            sname = name_entry.get_text().strip() or sid
-            cmd = cmd_entry.get_text().strip()
-            args = [a for a in args_entry.get_text().split(" ") if a.strip()]
+            sname = name_entry.get_text().strip() or sid or "custom-mcp"
+            idx = transport_row.get_selected()
+            sel_transport = transport_keys[idx] if 0 <= idx < len(transport_keys) else "stdio"
+
             try:
-                env_dict = json.loads(env_entry.get_text()) if env_entry.get_text() else {}
+                env_dict = json.loads(env_entry.get_text()) if env_entry.get_text().strip() else {}
             except Exception:
                 env_dict = {}
+            try:
+                hdr_dict = json.loads(headers_entry.get_text()) if headers_entry.get_text().strip() else {}
+            except Exception:
+                hdr_dict = {}
 
-            transport = "sse" if cmd.startswith("http://") or cmd.startswith("https://") else "stdio"
+            remote_mode = sel_transport != "stdio"
+            cmd_val = cmd_entry.get_text().strip()
+            url_val = url_entry.get_text().strip()
 
-            self.config_manager.set_mcp_server(sid, {
+            # If user pasted an http(s) URL into command entry while in stdio mode, treat as remote
+            if not remote_mode and cmd_val.startswith(("http://", "https://")):
+                remote_mode = True
+                url_val = cmd_val
+                sel_transport = infer_remote_transport(url_val, "auto")
+
+            args_list = [a for a in args_entry.get_text().split(" ") if a.strip()]
+            cfg = normalize_mcp_server_config({
                 "name": sname,
-                "command": cmd,
-                "args": args,
-                "transport": transport,
+                "command": url_val if remote_mode else cmd_val,
+                "url": url_val if remote_mode else "",
+                "args": [] if remote_mode else args_list,
+                "transport": sel_transport,
+                "headers": hdr_dict if remote_mode else {},
+                "api_key": api_key_entry.get_text().strip() if remote_mode else "",
                 "env": env_dict,
                 "disabled": False
-            })
+            }, fallback_name=sid or "custom-mcp")
+            return sid, cfg
+
+        form_test_btn = Gtk.Button(label="🧪 Probar Conexión")
+        def test_from_form(_b):
+            sid, draft_cfg = _build_form_cfg()
+            if not draft_cfg.get("command") and not draft_cfg.get("url"):
+                form_status_label.set_markup("<span foreground='#f38ba8'>⚠️ Ingresa un comando o URL remota para probar.</span>")
+                return
+            form_test_btn.set_sensitive(False)
+            form_status_label.set_text("⏳ Probando conexión con el servidor MCP...")
+
+            def _worker():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    res = loop.run_until_complete(MCPManager.test_server_connection(draft_cfg, server_id=sid or "test-mcp"))
+                except Exception as ex:
+                    res = {"ok": False, "error": str(ex), "tools_count": 0}
+                finally:
+                    loop.close()
+
+                def _done():
+                    form_test_btn.set_sensitive(True)
+                    if res.get("ok"):
+                        t_cnt = res.get("tools_count", 0)
+                        t_mode = res.get("transport", draft_cfg.get("transport"))
+                        preview = ", ".join(res.get("tools", [])[:5])
+                        extra = f" ({preview})" if preview else ""
+                        form_status_label.set_markup(
+                            f"<span foreground='#a6e3a1'>✅ Conectado ({html.escape(str(t_mode))}): {t_cnt} herramientas descubiertas{html.escape(extra)}</span>"
+                        )
+                    else:
+                        err_txt = res.get("error") or "Error al conectar"
+                        form_status_label.set_markup(
+                            f"<span foreground='#f38ba8'>❌ Error: {html.escape(str(err_txt))}</span>"
+                        )
+                    return False
+
+                GLib.idle_add(_done)
+
+            threading.Thread(target=_worker, daemon=True).start()
+
+        form_test_btn.connect("clicked", test_from_form)
+        form_actions_bar.append(form_test_btn)
+
+        form_save_btn = Gtk.Button(label="Añadir e Iniciar")
+        form_save_btn.add_css_class("suggested-action")
+        form_save_btn.set_hexpand(True)
+
+        def add_from_form(_b):
+            sid, cfg = _build_form_cfg()
+            if not sid:
+                form_status_label.set_markup("<span foreground='#f38ba8'>⚠️ Introduce un ID único para el servidor.</span>")
+                return
+            if not cfg.get("command") and not cfg.get("url"):
+                form_status_label.set_markup("<span foreground='#f38ba8'>⚠️ Introduce un comando local o una URL remota.</span>")
+                return
+
+            clean_id = "".join(c if c.isalnum() or c == "-" else "_" for c in sid.lower())
+            self.config_manager.set_mcp_server(clean_id, cfg)
             self.on_sync_needed()
             self._refresh_mcp_servers_list()
             dialog.close()
 
         form_save_btn.connect("clicked", add_from_form)
-        form_box.append(form_save_btn)
+        form_actions_bar.append(form_save_btn)
+        form_box.append(form_actions_bar)
 
         # Populate form button from JSON tab
         load_to_form_btn = Gtk.Button(label="➡️ Cargar en Formulario")
@@ -1017,9 +1547,24 @@ class SettingsWindow(Adw.PreferencesWindow):
                     sid, scfg = servers[0]
                     id_entry.set_text(sid)
                     name_entry.set_text(scfg.get("name") or sid)
-                    cmd_entry.set_text(scfg.get("command", ""))
-                    args_entry.set_text(" ".join(str(a) for a in scfg.get("args", [])))
+                    t_val = scfg.get("transport", "stdio")
+                    if t_val in transport_keys:
+                        transport_row.set_selected(transport_keys.index(t_val))
+                    elif is_remote_server_config(scfg):
+                        transport_row.set_selected(transport_keys.index("auto"))
+                    else:
+                        transport_row.set_selected(0)
+
+                    if is_remote_server_config(scfg):
+                        url_entry.set_text(scfg.get("url") or scfg.get("command", ""))
+                        api_key_entry.set_text(scfg.get("api_key", ""))
+                        headers_entry.set_text(json.dumps(scfg.get("headers", {})))
+                    else:
+                        cmd_entry.set_text(scfg.get("command", ""))
+                        args_entry.set_text(" ".join(str(a) for a in scfg.get("args", [])))
+
                     env_entry.set_text(json.dumps(scfg.get("env", {})))
+                    _sync_form_transport_fields()
                     stack.set_visible_child_name("form")
                 else:
                     json_status_label.set_text("No se detectó un servidor válido en el JSON.")
@@ -1093,7 +1638,349 @@ class SettingsWindow(Adw.PreferencesWindow):
         mem_grp.add(mem_action)
         page.add(mem_grp)
 
+        # Layer 3: LESSONS.md
+        lessons_grp = Adw.PreferencesGroup(title="Capa 3: Reglas y Lecciones Aprendidas (LESSONS.md)")
+        lessons_grp.set_description("Correcciones del usuario, límites y directivas que evitan repetir errores.")
+
+        lessons_scrolled = Gtk.ScrolledWindow()
+        lessons_scrolled.set_min_content_height(160)
+        self.lessons_textview = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD)
+        self.lessons_textview.get_buffer().set_text(self.memory_manager.get_lessons())
+        lessons_scrolled.set_child(self.lessons_textview)
+        lessons_grp.add(lessons_scrolled)
+
+        save_lessons_btn = Gtk.Button(label="Guardar LESSONS.md")
+        save_lessons_btn.connect("clicked", self._save_lessons)
+        lessons_action = Adw.ActionRow()
+        lessons_action.add_suffix(save_lessons_btn)
+        lessons_grp.add(lessons_action)
+        page.add(lessons_grp)
+
+        # Layer 4 & 5: Cognitive Episodic Memory Index (SQLite FTS5 + Hybrid Semantic/Temporal Ranking)
+        ep_grp = Adw.PreferencesGroup(title="Capas 4 y 5: Memoria Episódica Cognitiva (SQLite FTS5 + Ranking Híbrido)")
+        ep_grp.set_description(
+            "Índice híbrido léxico, semántico (vectores TF con stemming y sinónimos), temporal ('ayer', 'la semana pasada') "
+            "y por importancia cognitiva con refuerzo por evocación. Haz clic en cualquier recuerdo para desplegar su título y contenido completo."
+        )
+
+        self.ep_stats_row = Adw.ActionRow(title="Estado del Índice Episódico")
+        sync_ep_btn = Gtk.Button(label="Sincronizar Hilos y Bitácoras")
+        sync_ep_btn.set_valign(Gtk.Align.CENTER)
+        sync_ep_btn.connect("clicked", self._on_sync_episodic_memory)
+
+        prune_ep_btn = Gtk.Button(label="Consolidar Ruido")
+        prune_ep_btn.set_valign(Gtk.Align.CENTER)
+        prune_ep_btn.set_tooltip_text("Elimina episodios antiguos de muy baja importancia que nunca fueron evocados")
+        prune_ep_btn.connect("clicked", self._on_consolidate_episodic_memory)
+
+        self.ep_stats_row.add_suffix(sync_ep_btn)
+        self.ep_stats_row.add_suffix(prune_ep_btn)
+        ep_grp.add(self.ep_stats_row)
+
+        search_row = Adw.ActionRow(title="Explorar / Buscar Recuerdos Episódicos")
+        self.ep_search_entry = Gtk.SearchEntry(placeholder_text="Ej: qué hicimos ayer, hyprland, audio, error...")
+        self.ep_search_entry.set_hexpand(True)
+        self.ep_search_entry.set_valign(Gtk.Align.CENTER)
+        self.ep_search_entry.connect("activate", self._on_search_episodic_memory)
+        self.ep_search_entry.connect("search-changed", self._on_search_episodic_memory)
+        search_row.add_suffix(self.ep_search_entry)
+        ep_grp.add(search_row)
+
+        self.ep_results_box = Gtk.ListBox()
+        self.ep_results_box.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.ep_results_box.add_css_class("boxed-list")
+        ep_grp.add(self.ep_results_box)
+
+        page.add(ep_grp)
+        self._refresh_episodic_stats_and_list()
+
         self.add(page)
+
+    def _build_full_episode_title(self, ep: Dict[str, Any]) -> str:
+        """Reconstructs the complete untruncated title for an episode."""
+        raw_title = (ep.get("title") or "Episodio").strip()
+        u_msg = (ep.get("user_msg") or "").strip()
+        a_msg = (ep.get("assistant_msg") or "").strip()
+        raw_content = (ep.get("content") or "").strip()
+        tools_list = ep.get("tools_used") or []
+        short_tools = [t.split("__")[-1] for t in tools_list[:2]]
+
+        if raw_title.startswith("Lección aprendida:") and a_msg:
+            first_line = next((ln.strip() for ln in a_msg.splitlines() if ln.strip()), a_msg)
+            return f"Lección aprendida: {first_line}"
+        if raw_title.startswith("Hecho recordado:") and a_msg:
+            first_line = next((ln.strip() for ln in a_msg.splitlines() if ln.strip()), a_msg)
+            return f"Hecho recordado: {first_line}"
+
+        if u_msg:
+            first_u_para = next((ln.strip() for ln in u_msg.splitlines() if ln.strip()), "")
+            first_u_para = first_u_para.lstrip("#>*`- ")
+            if raw_content.startswith("Hilo: "):
+                thread_prefix = raw_content.splitlines()[0][6:].strip()
+                if thread_prefix and thread_prefix not in ("Nueva conversación", "Nuevo hilo") and not first_u_para.startswith(thread_prefix):
+                    candidate = f"{thread_prefix}: {first_u_para}"
+                else:
+                    candidate = first_u_para
+            else:
+                candidate = first_u_para
+
+            if short_tools:
+                tools_suffix = f" [{', '.join(short_tools)}]"
+                if tools_suffix not in candidate:
+                    candidate = f"{candidate}{tools_suffix}"
+
+            if candidate and ("…" in raw_title or len(candidate) > len(raw_title)):
+                return candidate
+
+        return raw_title
+
+    def _create_episodic_expander_row(self, ep: Dict[str, Any]) -> Adw.ExpanderRow:
+        """Creates a clickable Adw.ExpanderRow that unfolds the full title and complete memory content."""
+        short_title = (ep.get("title") or "Episodio").strip()
+        full_title = self._build_full_episode_title(ep)
+
+        date_str = ep.get("timestamp") or ep.get("date_str") or ""
+        if "T" in date_str:
+            date_str = date_str.replace("T", " ")[:16]
+        cat = ep.get("category", "interaction")
+        imp = ep.get("importance", 0.5)
+        score = ep.get("score")
+        all_tags = ep.get("tags") or []
+        all_tools = ep.get("tools_used") or []
+        all_entities = ep.get("entities") or []
+        access_count = ep.get("access_count", 0)
+        sid = ep.get("source_id", "")
+        thread_id = ep.get("thread_id", "")
+
+        tags_short = " ".join(f"#{t}" for t in all_tags[:4])
+        tools_short = ", ".join(t.split("__")[-1] for t in all_tools[:3])
+
+        meta_parts = [date_str, f"cat:{cat}", f"imp:{imp}"]
+        if score is not None:
+            meta_parts.append(f"score:{score:.2f}")
+        if tags_short:
+            meta_parts.append(tags_short)
+        if tools_short:
+            meta_parts.append(f"tools:[{tools_short}]")
+        meta_line = " • ".join(p for p in meta_parts if p)
+
+        u_msg = (ep.get("user_msg") or "").strip()
+        a_msg = (ep.get("assistant_msg") or "").strip()
+        raw_content = (ep.get("content") or "").strip()
+
+        preview_source = (a_msg or raw_content).replace("\n", " ").strip()
+        preview_snippet = preview_source[:160] + ("…" if len(preview_source) > 160 else "")
+        collapsed_subtitle = f"{meta_line}\n{preview_snippet}" if preview_snippet else meta_line
+
+        row = Adw.ExpanderRow()
+        row.set_use_markup(True)
+        row.set_title(html.escape(short_title))
+        row.set_subtitle(html.escape(collapsed_subtitle))
+        row.set_title_lines(1)
+        row.set_subtitle_lines(2)
+        row.set_tooltip_text("Haz clic para desplegar el título completo y ver la memoria detallada")
+
+        def _on_expanded_changed(exp_row, _pspec):
+            if exp_row.get_expanded():
+                exp_row.set_title(html.escape(full_title))
+                exp_row.set_title_lines(0)
+                exp_row.set_subtitle(html.escape(meta_line))
+                exp_row.set_subtitle_lines(0)
+            else:
+                exp_row.set_title(html.escape(short_title))
+                exp_row.set_title_lines(1)
+                exp_row.set_subtitle(html.escape(collapsed_subtitle))
+                exp_row.set_subtitle_lines(2)
+
+        row.connect("notify::expanded", _on_expanded_changed)
+
+        # Build expanded detail card inside the ExpanderRow
+        detail_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        detail_box.set_margin_top(10)
+        detail_box.set_margin_bottom(12)
+        detail_box.set_margin_start(14)
+        detail_box.set_margin_end(14)
+
+        # 1. Full Title / User Request section
+        prompt_text = u_msg or full_title
+        if prompt_text:
+            u_hdr = Gtk.Label(
+                label="<b>📌 Título / Entrada Completa:</b>",
+                use_markup=True,
+                xalign=0
+            )
+            detail_box.append(u_hdr)
+
+            u_lbl = Gtk.Label(
+                label=prompt_text,
+                wrap=True,
+                wrap_mode=Pango.WrapMode.WORD_CHAR,
+                xalign=0,
+                selectable=True
+            )
+            if len(prompt_text) > 600 or prompt_text.count("\n") > 8:
+                u_scroll = Gtk.ScrolledWindow()
+                u_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+                u_scroll.set_min_content_height(100)
+                u_scroll.set_max_content_height(200)
+                u_scroll.set_propagate_natural_height(True)
+                u_scroll.set_child(u_lbl)
+                detail_box.append(u_scroll)
+            else:
+                detail_box.append(u_lbl)
+
+        # 2. Full Assistant / Memory Body section
+        memory_body = a_msg or raw_content
+        if memory_body:
+            a_hdr = Gtk.Label(
+                label="<b>🧠 Contenido de la Memoria:</b>",
+                use_markup=True,
+                xalign=0
+            )
+            a_hdr.set_margin_top(4)
+            detail_box.append(a_hdr)
+
+            a_lbl = Gtk.Label(
+                label=memory_body,
+                wrap=True,
+                wrap_mode=Pango.WrapMode.WORD_CHAR,
+                xalign=0,
+                selectable=True
+            )
+            if len(memory_body) > 900 or memory_body.count("\n") > 12:
+                a_scroll = Gtk.ScrolledWindow()
+                a_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+                a_scroll.set_min_content_height(120)
+                a_scroll.set_max_content_height(240)
+                a_scroll.set_propagate_natural_height(True)
+                a_scroll.set_child(a_lbl)
+                detail_box.append(a_scroll)
+            else:
+                detail_box.append(a_lbl)
+
+        # 3. Full Metadata footer
+        extra_meta_lines = []
+        if all_tags:
+            extra_meta_lines.append(f"<b>Etiquetas:</b> {html.escape(' '.join('#' + t for t in all_tags))}")
+        if all_tools:
+            extra_meta_lines.append(f"<b>Herramientas:</b> <tt>{html.escape(', '.join(all_tools))}</tt>")
+        if all_entities:
+            extra_meta_lines.append(f"<b>Entidades:</b> <tt>{html.escape(', '.join(all_entities))}</tt>")
+        meta_tail = [f"<b>Fecha:</b> {html.escape(date_str)}", f"<b>Categoría:</b> {html.escape(cat)}", f"<b>Importancia:</b> {imp}", f"<b>Evocaciones:</b> {access_count}"]
+        if thread_id:
+            meta_tail.append(f"<b>Hilo:</b> <tt>{html.escape(thread_id)}</tt>")
+        if sid:
+            meta_tail.append(f"<b>ID:</b> <tt>{html.escape(sid)}</tt>")
+        extra_meta_lines.append(" • ".join(meta_tail))
+
+        meta_footer_lbl = Gtk.Label(
+            label="<small>" + "\n".join(extra_meta_lines) + "</small>",
+            use_markup=True,
+            wrap=True,
+            wrap_mode=Pango.WrapMode.WORD_CHAR,
+            xalign=0,
+            selectable=True
+        )
+        meta_footer_lbl.set_margin_top(4)
+        meta_footer_lbl.set_opacity(0.8)
+        detail_box.append(meta_footer_lbl)
+
+        detail_row = Gtk.ListBoxRow()
+        detail_row.set_activatable(False)
+        detail_row.set_selectable(False)
+        detail_row.set_child(detail_box)
+        row.add_row(detail_row)
+
+        # Suffix buttons: Copy & Delete
+        copy_btn = Gtk.Button(icon_name="edit-copy-symbolic")
+        copy_btn.set_valign(Gtk.Align.CENTER)
+        copy_btn.add_css_class("flat")
+        copy_btn.set_tooltip_text("Copiar contenido completo de la memoria")
+
+        def _on_copy_memory(_btn):
+            full_copy_text = f"Título: {full_title}\nFecha: {date_str} ({cat})\n"
+            if u_msg and u_msg != full_title:
+                full_copy_text += f"\nUsuario:\n{u_msg}\n"
+            if memory_body:
+                full_copy_text += f"\nMemoria:\n{memory_body}\n"
+            clipboard = self.get_clipboard()
+            clipboard.set(full_copy_text.strip())
+            copy_btn.set_icon_name("object-select-symbolic")
+            GLib.timeout_add(1400, lambda: (copy_btn.set_icon_name("edit-copy-symbolic"), False)[1])
+
+        copy_btn.connect("clicked", _on_copy_memory)
+        row.add_suffix(copy_btn)
+
+        if sid:
+            del_btn = Gtk.Button(icon_name="user-trash-symbolic")
+            del_btn.set_valign(Gtk.Align.CENTER)
+            del_btn.add_css_class("flat")
+            del_btn.set_tooltip_text("Eliminar este recuerdo episódico")
+            del_btn.connect("clicked", lambda _b, s=sid: self._on_delete_episode(s))
+            row.add_suffix(del_btn)
+
+        return row
+
+    def _refresh_episodic_stats_and_list(self, query: str = ""):
+        try:
+            stats = self.memory_manager.get_episodic_stats()
+            total = stats.get("total_episodes", 0)
+            vec_cnt = stats.get("vectorized_episodes", 0)
+            vec_eng = stats.get("vector_engine", {})
+            eng_label = vec_eng.get("backend", "vector-384")
+            avg_imp = stats.get("avg_importance", 0.0)
+            recalls = stats.get("total_recalls", 0)
+            db_kb = stats.get("db_size_kb", 0.0)
+            top_tags = ", ".join(f"#{t['tag']} ({t['count']})" for t in stats.get("top_tags", [])[:5])
+            sub = f"{total} episodios ({vec_cnt} vectorizados • {eng_label}) • Imp. media: {avg_imp} • Evocaciones: {recalls} • {db_kb} KB"
+            if top_tags:
+                sub += f"\nEtiquetas principales: {top_tags}"
+            self.ep_stats_row.set_subtitle(sub)
+
+            # Clear existing rows
+            while True:
+                child = self.ep_results_box.get_first_child()
+                if not child:
+                    break
+                self.ep_results_box.remove(child)
+
+            q = query.strip()
+            if q:
+                items = self.memory_manager.episodic_index.search(q, limit=15, reinforce=False)
+            else:
+                items = self.memory_manager.get_timeline(limit=15)
+
+            if not items:
+                empty_row = Adw.ActionRow(
+                    title="No se encontraron episodios",
+                    subtitle="Interactúa con el asistente o pulsa 'Sincronizar Hilos y Bitácoras'."
+                )
+                self.ep_results_box.append(empty_row)
+                return
+
+            for ep in items:
+                row = self._create_episodic_expander_row(ep)
+                self.ep_results_box.append(row)
+        except Exception as e:
+            logger.warning(f"Error refreshing episodic UI: {e}")
+
+    def _on_sync_episodic_memory(self, _btn):
+        self.memory_manager.sync_all()
+        q = self.ep_search_entry.get_text() if hasattr(self, "ep_search_entry") else ""
+        self._refresh_episodic_stats_and_list(q)
+
+    def _on_consolidate_episodic_memory(self, _btn):
+        self.memory_manager.episodic_index.consolidate_old_episodes()
+        q = self.ep_search_entry.get_text() if hasattr(self, "ep_search_entry") else ""
+        self._refresh_episodic_stats_and_list(q)
+
+    def _on_search_episodic_memory(self, entry):
+        self._refresh_episodic_stats_and_list(entry.get_text())
+
+    def _on_delete_episode(self, source_id: str):
+        self.memory_manager.episodic_index.delete_episode(source_id)
+        q = self.ep_search_entry.get_text() if hasattr(self, "ep_search_entry") else ""
+        self._refresh_episodic_stats_and_list(q)
 
     def _save_user_profile(self, _btn):
         buf = self.user_textview.get_buffer()
@@ -1107,20 +1994,64 @@ class SettingsWindow(Adw.PreferencesWindow):
         text = buf.get_text(start, end, True)
         self.memory_manager.save_long_term_memory(text)
 
+    def _save_lessons(self, _btn):
+        buf = self.lessons_textview.get_buffer()
+        start, end = buf.get_bounds()
+        text = buf.get_text(start, end, True)
+        self.memory_manager.save_lessons(text)
+
     # -------------------------------------------------------------
-    # TAB 5: INTEGRACIÓN DE ESCRITORIO & WAYBAR
+    # TAB 5: APARIENCIA, INTEGRACIÓN DE ESCRITORIO & WAYBAR
     # -------------------------------------------------------------
     def _build_desktop_integration_page(self):
         page = Adw.PreferencesPage()
-        page.set_title("Escritorio y Waybar")
-        page.set_icon_name("input-keyboard-symbolic")
+        page.set_title("Escritorio y UI")
+        page.set_icon_name("preferences-desktop-appearance-symbolic")
+
+        # 1. Apariencia de la Interfaz (Modo Claro / Oscuro / Sistema)
+        theme_grp = Adw.PreferencesGroup()
+        theme_grp.set_title("Apariencia de la Interfaz (Tema Visual)")
+        theme_grp.set_description("Alterna entre el modo oscuro, el modo claro o sincroniza con el tema de tu entorno Linux.")
+
+        theme_options = [
+            ("dark", "🌙 Modo Oscuro"),
+            ("light", "☀️ Modo Claro"),
+            ("system", "🖥️ Automático (Seguir al sistema)")
+        ]
+        theme_keys = [t[0] for t in theme_options]
+        theme_labels = [t[1] for t in theme_options]
+
+        curr_theme = self.config_manager.get_theme()
+        curr_idx = theme_keys.index(curr_theme) if curr_theme in theme_keys else 0
+
+        self.theme_combo_row = Adw.ComboRow(
+            title="Tema de color",
+            subtitle="También puedes alternar rápidamente desde el menú principal o con Ctrl+D",
+            model=Gtk.StringList.new(theme_labels)
+        )
+        self.theme_combo_row.set_selected(curr_idx)
+
+        def _on_theme_row_changed(combo, _pspec):
+            idx = combo.get_selected()
+            if 0 <= idx < len(theme_keys):
+                chosen_theme = theme_keys[idx]
+                self.config_manager.set_theme(chosen_theme)
+                self.on_theme_changed(chosen_theme)
+                if not Adw.StyleManager.get_default().get_dark():
+                    self.add_css_class("theme-light")
+                else:
+                    self.remove_css_class("theme-light")
+
+        self.theme_combo_row.connect("notify::selected", _on_theme_row_changed)
+        theme_grp.add(self.theme_combo_row)
+        page.add(theme_grp)
 
         hypr_grp = Adw.PreferencesGroup()
         hypr_grp.set_title("Atajo en Hyprland")
         hypr_grp.set_description("Añade la siguiente línea en ~/.config/hypr/hyprland.conf para alternar el asistente con Super+A:")
         
         hypr_entry = Adw.EntryRow(title="Regla de atajo")
-        hypr_entry.set_text("bind = $mainMod, A, exec, /home/gato/.local/bin/pequeno-asistente --toggle")
+        hypr_entry.set_text(f"bind = $mainMod, A, exec, {Path.home() / '.local' / 'bin' / 'pequeno-asistente'} --toggle")
         hypr_entry.set_editable(False)
         hypr_grp.add(hypr_entry)
         page.add(hypr_grp)
@@ -1144,6 +2075,714 @@ class SettingsWindow(Adw.PreferencesWindow):
         page.add(waybar_grp)
 
         self.add(page)
+
+    def _on_settings_close(self, _w):
+        if hasattr(self, "hb_manager") and self.hb_manager and hasattr(self, "_hb_listener"):
+            self.hb_manager.remove_listener(self._hb_listener)
+        if hasattr(self, "skill_manager") and self.skill_manager and hasattr(self, "_skills_listener"):
+            self.skill_manager.remove_listener(self._skills_listener)
+        return False
+
+    def _refresh_settings_hb_ui(self):
+        self._refresh_shb_status_ui()
+        self._refresh_shb_automations_list()
+        self._refresh_shb_logs_ui()
+        return False
+
+    # -------------------------------------------------------------
+    # TAB: HABILIDADES PROCEDIMENTALES (SKILLS)
+    # -------------------------------------------------------------
+    def _build_skills_page(self):
+        page = Adw.PreferencesPage()
+        page.set_title("Habilidades")
+        page.set_icon_name("system-run-symbolic")
+
+        # 1. Header & Actions Group
+        actions_grp = Adw.PreferencesGroup()
+        actions_grp.set_title("Ecosistema de Habilidades (Skills)")
+        actions_grp.set_description(
+            "Habilidades modulares para el agente. Reconoce e integra automáticamente las habilidades de "
+            "Claude Code (~/.claude/skills), el estándar abierto ~/.agents/skills y las globales del sistema."
+        )
+
+        header_row = Adw.ActionRow(
+            title="Gestión de Habilidades",
+            subtitle="Instala desde GitHub/URL, importa carpetas locales o crea nuevas habilidades."
+        )
+
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+
+        open_folder_btn = Gtk.Button(label="📂 Abrir Carpeta")
+        open_folder_btn.set_tooltip_text("Abrir carpeta de habilidades del usuario en el gestor de archivos")
+        open_folder_btn.connect("clicked", self._on_open_skills_folder)
+        btn_box.append(open_folder_btn)
+
+        reload_btn = Gtk.Button(label="🔄 Recargar")
+        reload_btn.set_tooltip_text("Volver a escanear habilidades en disco")
+        reload_btn.connect("clicked", self._on_reload_skills)
+        btn_box.append(reload_btn)
+
+        install_btn = Gtk.Button(label="+ Instalar Habilidad")
+        install_btn.add_css_class("suggested-action")
+        install_btn.connect("clicked", self._on_open_install_skill_dialog)
+        btn_box.append(install_btn)
+
+        header_row.add_suffix(btn_box)
+        actions_grp.add(header_row)
+        page.add(actions_grp)
+
+        # 2. Filter & Search Group
+        search_grp = Adw.PreferencesGroup()
+        search_grp.set_title("Explorador y Filtros")
+
+        filter_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        filter_box.set_margin_top(4)
+        filter_box.set_margin_bottom(6)
+
+        self.skills_search_entry = Gtk.SearchEntry()
+        self.skills_search_entry.set_placeholder_text("Buscar por nombre, ID o descripción (ej: claude, git, thinking)...")
+        self.skills_search_entry.set_hexpand(True)
+        self.skills_search_entry.connect("search-changed", lambda _e: self._refresh_skills_list())
+        filter_box.append(self.skills_search_entry)
+
+        sources_labels = [
+            "Todos los orígenes",
+            "Claude Code",
+            "Pequeño Asistente",
+            "Global Agentes (~/.agents)",
+            "Sistema (/etc, /usr)",
+            "Antigravity"
+        ]
+        self.skills_source_combo = Adw.ComboRow(title="Filtrar por origen", model=Gtk.StringList.new(sources_labels))
+        self.skills_source_combo.connect("notify::selected", lambda _c, _p: self._refresh_skills_list())
+
+        filter_action_row = Adw.ActionRow()
+        filter_action_row.set_child(filter_box)
+        search_grp.add(filter_action_row)
+        search_grp.add(self.skills_source_combo)
+        page.add(search_grp)
+
+        # 3. Discovered Skills List Group
+        self.skills_list_grp = Adw.PreferencesGroup()
+        self.skills_list_grp.set_title("Habilidades Disponibles")
+        self.skills_list_grp.set_description("Lista unificada de habilidades detectadas en tu entorno.")
+        page.add(self.skills_list_grp)
+
+        self.add(page)
+        self._refresh_skills_list()
+
+    def _on_open_install_skill_dialog(self, _btn):
+        dlg = SkillInstallDialog(self, self.skill_manager, on_installed=self._refresh_skills_list)
+        dlg.present()
+
+    def _on_open_skills_folder(self, _btn):
+        import subprocess
+        user_skills_dir = os.path.expanduser("~/.config/pequeno-asistente/skills")
+        os.makedirs(user_skills_dir, exist_ok=True)
+        try:
+            subprocess.Popen(["xdg-open", user_skills_dir])
+        except Exception as e:
+            logger.warning(f"Error opening skills folder: {e}")
+
+    def _on_reload_skills(self, _btn):
+        self.skill_manager.discover_skills(force_refresh=True)
+        self._refresh_skills_list()
+
+    def _refresh_skills_list(self):
+        if not hasattr(self, "skills_list_grp") or self.skills_list_grp is None:
+            return
+
+        for w in list(self._skills_rows_widgets):
+            try:
+                self.skills_list_grp.remove(w)
+            except Exception:
+                pass
+        self._skills_rows_widgets.clear()
+
+        query = self.skills_search_entry.get_text().strip().lower() if hasattr(self, "skills_search_entry") else ""
+        source_idx = self.skills_source_combo.get_selected() if hasattr(self, "skills_source_combo") else 0
+
+        source_map = {
+            1: "claude",
+            2: "user",
+            3: "agents_global",
+            4: "system",
+            5: "antigravity"
+        }
+        filter_source = source_map.get(source_idx)
+
+        skills = self.skill_manager.discover_skills()
+        # Sort alphabetically by human-readable Name
+        sorted_skills = sorted(skills.values(), key=lambda s: s.name.lower())
+
+        matched_count = 0
+        for skill in sorted_skills:
+            if filter_source and skill.source != filter_source and filter_source not in skill.source:
+                continue
+
+            if query:
+                match = (query in skill.name.lower() or query in skill.description.lower() or query in skill.id.lower())
+                if not match and not any(query in t.lower() for t in skill.tags):
+                    continue
+
+            matched_count += 1
+            row = Adw.ActionRow()
+            escaped_name = html.escape(skill.name)
+            escaped_id = html.escape(skill.id)
+            desc_text = html.escape(skill.description)
+
+            # Prominently show the skill Name as the primary title
+            row.set_title(escaped_name)
+            row.set_subtitle(f"ID: {escaped_id} • {desc_text}")
+            row.set_title_lines(1)
+            row.set_subtitle_lines(2)
+            row.set_tooltip_text(f"{skill.name} ({skill.id})\n\n{skill.description}\n\nRuta: {skill.path}")
+
+            # Source Badge
+            badge = Gtk.Label(label=skill.source_label)
+            badge.add_css_class("status-pill")
+            row.add_suffix(badge)
+
+            # View button
+            view_btn = Gtk.Button(label="👁️ Ver")
+            view_btn.set_tooltip_text("Ver contenido e instrucciones de esta habilidad")
+            view_btn.connect("clicked", lambda _b, s=skill: self._on_skill_view_clicked(s))
+            row.add_suffix(view_btn)
+
+            # Toggle Switch
+            switch = Gtk.Switch()
+            switch.set_active(skill.enabled)
+            switch.set_valign(Gtk.Align.CENTER)
+            switch.connect("state-set", lambda sw, state, sid=skill.id: self._on_skill_toggle(sw, state, sid))
+            row.add_suffix(switch)
+
+            # Uninstall button (for user or claude skills)
+            if skill.source in ("user", "claude", "agents_global") or not skill.source in ("built-in", "system"):
+                del_btn = Gtk.Button()
+                del_btn.set_icon_name("user-trash-symbolic")
+                del_btn.add_css_class("flat")
+                del_btn.set_tooltip_text("Eliminar habilidad")
+                del_btn.connect("clicked", lambda _b, s=skill: self._on_skill_delete(s))
+                row.add_suffix(del_btn)
+
+            self.skills_list_grp.add(row)
+            self._skills_rows_widgets.append(row)
+
+        if matched_count == 0:
+            empty_row = Adw.ActionRow()
+            empty_row.set_title("No se encontraron habilidades")
+            empty_row.set_subtitle("Usa el botón '+ Instalar Habilidad' para agregar una desde GitHub, URL o crearla.")
+            self.skills_list_grp.add(empty_row)
+            self._skills_rows_widgets.append(empty_row)
+
+    def _on_skill_view_clicked(self, skill: SkillInfo):
+        dlg = SkillViewerDialog(self, skill)
+        dlg.present()
+
+    def _on_skill_toggle(self, switch: Gtk.Switch, state: bool, skill_id: str) -> bool:
+        self.skill_manager.toggle_skill(skill_id, state)
+        return False
+
+    def _on_skill_delete(self, skill: SkillInfo):
+        msg_dialog = Adw.MessageDialog(
+            transient_for=self,
+            heading="¿Eliminar habilidad?",
+            body=f"¿Estás seguro de que deseas eliminar permanentemente la habilidad '{skill.name}' de tu disco ({skill.path})?"
+        )
+        msg_dialog.add_response("cancel", "Cancelar")
+        msg_dialog.add_response("delete", "Eliminar")
+        msg_dialog.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
+
+        def _on_response(_d, response_id):
+            if response_id == "delete":
+                res = self.skill_manager.uninstall_skill(skill.id)
+                self._refresh_skills_list()
+
+        msg_dialog.connect("response", _on_response)
+        msg_dialog.present()
+
+    # -------------------------------------------------------------
+    # TAB: HEARTBEATS Y AUTOMATIZACIONES
+    # -------------------------------------------------------------
+    def _build_heartbeats_page(self):
+        page = Adw.PreferencesPage()
+        page.set_title("Heartbeats")
+        page.set_icon_name("alarm-symbolic")
+
+        hb_cfg = self.config_manager.get_heartbeat_config()
+
+        # 1. Master Control
+        ctrl_grp = Adw.PreferencesGroup()
+        ctrl_grp.set_title("Pulso Proactivo del Agente (Heartbeat)")
+        ctrl_grp.set_description(
+            "El agente despierta de forma periódica en segundo plano para verificar el estado del sistema, "
+            "evaluar tareas pendientes y consultar HEARTBEAT.md con herramientas MCP."
+        )
+
+        self.shb_enable_row = Adw.SwitchRow(
+            title="Activar Pulso Periódico (Heartbeat)",
+            subtitle="Despierta automáticamente al agente según el intervalo seleccionado"
+        )
+        self.shb_enable_row.set_active(hb_cfg.get("enabled", False))
+        def _on_enable_toggled(row, _param):
+            val = row.get_active()
+            self.config_manager.set_heartbeat_config({"enabled": val})
+            if self.hb_manager:
+                self.hb_manager.notify_listeners()
+        self.shb_enable_row.connect("notify::active", _on_enable_toggled)
+        ctrl_grp.add(self.shb_enable_row)
+
+        # Interval Options
+        intervals = [
+            (10, "Cada 10 minutos"),
+            (15, "Cada 15 minutos"),
+            (30, "Cada 30 minutos (Recomendado)"),
+            (60, "Cada 1 hora"),
+            (120, "Cada 2 horas")
+        ]
+        self.shb_interval_values = [i[0] for i in intervals]
+        interval_labels = [i[1] for i in intervals]
+        curr_interval = int(hb_cfg.get("interval_minutes", 30))
+        sel_idx = self.shb_interval_values.index(curr_interval) if curr_interval in self.shb_interval_values else 2
+
+        self.shb_interval_combo = Adw.ComboRow(
+            title="Intervalo entre Pulsos",
+            model=Gtk.StringList.new(interval_labels)
+        )
+        self.shb_interval_combo.set_selected(sel_idx)
+        def _on_interval_changed(combo, _param):
+            idx = combo.get_selected()
+            if 0 <= idx < len(self.shb_interval_values):
+                val = self.shb_interval_values[idx]
+                self.config_manager.set_heartbeat_config({"interval_minutes": val})
+                if self.hb_manager:
+                    self.hb_manager.notify_listeners()
+        self.shb_interval_combo.connect("notify::selected", _on_interval_changed)
+        ctrl_grp.add(self.shb_interval_combo)
+
+        # Active Hours Filter
+        self.shb_active_hours_row = Adw.SwitchRow(
+            title="Solo en Horario de Actividad",
+            subtitle="Pausa los pulsos durante la noche para evitar interrupciones o consumo innecesario"
+        )
+        self.shb_active_hours_row.set_active(hb_cfg.get("active_hours_only", True))
+        def _on_active_hours_toggled(row, _param):
+            val = row.get_active()
+            self.config_manager.set_heartbeat_config({"active_hours_only": val})
+        self.shb_active_hours_row.connect("notify::active", _on_active_hours_toggled)
+        ctrl_grp.add(self.shb_active_hours_row)
+
+        # Hours Range
+        range_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        range_box.set_margin_top(4)
+        range_box.set_margin_bottom(4)
+
+        start_lbl = Gtk.Label(label="Inicio:")
+        range_box.append(start_lbl)
+        self.shb_start_entry = Gtk.Entry()
+        self.shb_start_entry.set_text(hb_cfg.get("active_start", "08:00"))
+        self.shb_start_entry.set_max_width_chars(6)
+        range_box.append(self.shb_start_entry)
+
+        end_lbl = Gtk.Label(label="Fin:")
+        range_box.append(end_lbl)
+        self.shb_end_entry = Gtk.Entry()
+        self.shb_end_entry.set_text(hb_cfg.get("active_end", "23:00"))
+        self.shb_end_entry.set_max_width_chars(6)
+        range_box.append(self.shb_end_entry)
+
+        save_hours_btn = Gtk.Button(label="Aplicar Horas")
+        save_hours_btn.add_css_class("flat")
+        def _on_save_hours(_b):
+            sh = self.shb_start_entry.get_text().strip()
+            eh = self.shb_end_entry.get_text().strip()
+            self.config_manager.set_heartbeat_config({"active_start": sh, "active_end": eh})
+            save_hours_btn.set_label("✓ Aplicado")
+            GLib.timeout_add(1500, lambda: (save_hours_btn.set_label("Aplicar Horas"), False)[1])
+        save_hours_btn.connect("clicked", _on_save_hours)
+        range_box.append(save_hours_btn)
+
+        hours_row = Adw.ActionRow(title="Rango Horario Activo (HH:MM)")
+        hours_row.set_child(range_box)
+        ctrl_grp.add(hours_row)
+
+        # Silent if OK & Alerts
+        self.shb_silent_row = Adw.SwitchRow(
+            title="Silencio Inteligente",
+            subtitle="Si no hay alertas ni novedades (HEARTBEAT_OK), no molesta al usuario"
+        )
+        self.shb_silent_row.set_active(hb_cfg.get("silent_if_ok", True))
+        def _on_silent_toggled(row, _param):
+            val = row.get_active()
+            self.config_manager.set_heartbeat_config({"silent_if_ok": val})
+        self.shb_silent_row.connect("notify::active", _on_silent_toggled)
+        ctrl_grp.add(self.shb_silent_row)
+
+        self.shb_notif_row = Adw.SwitchRow(
+            title="Notificaciones Gráficas de Escritorio",
+            subtitle="Muestra aviso emergente con notify-send cuando hay hallazgos o alertas"
+        )
+        self.shb_notif_row.set_active(hb_cfg.get("desktop_notification", True))
+        def _on_notif_toggled(row, _param):
+            val = row.get_active()
+            self.config_manager.set_heartbeat_config({"desktop_notification": val})
+        self.shb_notif_row.connect("notify::active", _on_notif_toggled)
+        ctrl_grp.add(self.shb_notif_row)
+
+        self.shb_chat_row = Adw.SwitchRow(
+            title="Mostrar en el Chat",
+            subtitle="Publica el resumen en una tarjeta en el hilo de conversación"
+        )
+        self.shb_chat_row.set_active(hb_cfg.get("show_in_chat", True))
+        def _on_chat_toggled(row, _param):
+            val = row.get_active()
+            self.config_manager.set_heartbeat_config({"show_in_chat": val})
+        self.shb_chat_row.connect("notify::active", _on_chat_toggled)
+        ctrl_grp.add(self.shb_chat_row)
+
+        self.shb_tts_row = Adw.SwitchRow(
+            title="Pronunciar con Voz TTS",
+            subtitle="Lee el aviso por voz si hay alertas importantes"
+        )
+        self.shb_tts_row.set_active(hb_cfg.get("speak_tts", False))
+        def _on_tts_toggled(row, _param):
+            val = row.get_active()
+            self.config_manager.set_heartbeat_config({"speak_tts": val})
+        self.shb_tts_row.connect("notify::active", _on_tts_toggled)
+        ctrl_grp.add(self.shb_tts_row)
+
+        # Trigger now row
+        self.shb_trigger_row = Adw.ActionRow(
+            title="Estado del Pulso y Ejecución Inmediata",
+            subtitle="Último pulso: Nunca"
+        )
+        self.shb_status_pill = Gtk.Label(label="IDLE")
+        self.shb_status_pill.add_css_class("status-pill")
+        self.shb_trigger_row.add_suffix(self.shb_status_pill)
+
+        self.shb_spinner = Gtk.Spinner()
+        self.shb_trigger_row.add_suffix(self.shb_spinner)
+
+        self.shb_trigger_btn = Gtk.Button(label="💓 Probar Pulso Ahora")
+        self.shb_trigger_btn.add_css_class("suggested-action")
+        self.shb_trigger_btn.connect("clicked", lambda _b: self.hb_manager and self.hb_manager.trigger_global_now())
+        self.shb_trigger_row.add_suffix(self.shb_trigger_btn)
+        ctrl_grp.add(self.shb_trigger_row)
+
+        page.add(ctrl_grp)
+
+        # 2. HEARTBEAT.md Checklist Editor
+        md_grp = Adw.PreferencesGroup()
+        md_grp.set_title("Lista de Verificación (HEARTBEAT.md)")
+        md_grp.set_description(
+            "Archivo Markdown con las instrucciones que el agente verifica en cada pulso periódico."
+        )
+
+        md_scroll = Gtk.ScrolledWindow()
+        md_scroll.set_min_content_height(180)
+        md_scroll.set_max_content_height(280)
+        md_scroll.add_css_class("chat-input")
+
+        self.shb_md_textview = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD)
+        self.shb_md_textview.get_buffer().set_text(self.memory_manager.get_heartbeat_md())
+        md_scroll.set_child(self.shb_md_textview)
+
+        md_row = Adw.ActionRow()
+        md_row.set_child(md_scroll)
+        md_grp.add(md_row)
+
+        btn_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        btn_bar.set_halign(Gtk.Align.END)
+        btn_bar.set_margin_top(6)
+        btn_bar.set_margin_bottom(6)
+
+        reset_btn = Gtk.Button(label="Restablecer por Defecto")
+        reset_btn.add_css_class("flat")
+        def _on_reset(_b):
+            self.shb_md_textview.get_buffer().set_text(DEFAULT_HEARTBEAT_MD)
+            self.memory_manager.save_heartbeat_md(DEFAULT_HEARTBEAT_MD)
+            if self.hb_manager:
+                self.hb_manager.notify_listeners()
+        reset_btn.connect("clicked", _on_reset)
+        btn_bar.append(reset_btn)
+
+        save_md_btn = Gtk.Button(label="Guardar HEARTBEAT.md")
+        save_md_btn.add_css_class("suggested-action")
+        def _on_save_md(_b):
+            buf = self.shb_md_textview.get_buffer()
+            start, end = buf.get_bounds()
+            text = buf.get_text(start, end, True)
+            self.memory_manager.save_heartbeat_md(text)
+            if self.hb_manager:
+                self.hb_manager.notify_listeners()
+            save_md_btn.set_label("✓ Guardado")
+            GLib.timeout_add(1500, lambda: (save_md_btn.set_label("Guardar HEARTBEAT.md"), False)[1])
+        save_md_btn.connect("clicked", _on_save_md)
+        btn_bar.append(save_md_btn)
+
+        btn_row = Adw.ActionRow()
+        btn_row.set_child(btn_bar)
+        md_grp.add(btn_row)
+        page.add(md_grp)
+
+        # 3. Individual Automations List
+        auto_header_grp = Adw.PreferencesGroup()
+        auto_header_grp.set_title("Automatizaciones Programadas")
+        auto_header_grp.set_description(
+            "Tareas específicas (monitores de sistema, briefings diarios, recordatorios) que el agente ejecuta de forma autónoma."
+        )
+
+        auto_action_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        auto_action_box.set_margin_top(4)
+        auto_action_box.set_margin_bottom(4)
+
+        new_auto_btn = Gtk.Button(label="➕ Nueva Automatización")
+        new_auto_btn.add_css_class("suggested-action")
+        new_auto_btn.connect("clicked", lambda _b: self._open_shb_automation_editor(None))
+        auto_action_box.append(new_auto_btn)
+
+        auto_act_row = Adw.ActionRow()
+        auto_act_row.set_child(auto_action_box)
+        auto_header_grp.add(auto_act_row)
+        page.add(auto_header_grp)
+
+        self.shb_auto_list_grp = Adw.PreferencesGroup()
+        self.shb_auto_list_grp.set_title("Tareas Activas")
+        page.add(self.shb_auto_list_grp)
+
+        # 4. Logs Group
+        logs_header_grp = Adw.PreferencesGroup()
+        logs_header_grp.set_title("Registro de Ejecuciones")
+        logs_header_grp.set_description("Historial de pulsos recientes evaluados en segundo plano.")
+
+        clear_logs_btn = Gtk.Button(label="🗑 Limpiar Registro")
+        clear_logs_btn.add_css_class("flat")
+        clear_logs_btn.connect("clicked", lambda _b: (self.hb_manager and self.hb_manager.clear_logs(), self._refresh_shb_logs_ui()))
+        logs_act_row = Adw.ActionRow()
+        logs_act_row.add_suffix(clear_logs_btn)
+        logs_header_grp.add(logs_act_row)
+        page.add(logs_header_grp)
+
+        self.shb_logs_grp = Adw.PreferencesGroup()
+        self.shb_logs_grp.set_title("Últimos Pulsos")
+        page.add(self.shb_logs_grp)
+
+        self.add(page)
+        self._refresh_settings_hb_ui()
+
+    def _open_shb_automation_editor(self, auto_data: Optional[Dict[str, Any]]):
+        if not self.hb_manager:
+            return
+        dlg = AutomationEditorDialog(
+            parent=self,
+            hb_manager=self.hb_manager,
+            automation_data=auto_data,
+            on_saved=lambda _a: self._refresh_shb_automations_list()
+        )
+        dlg.present()
+
+    def _refresh_shb_status_ui(self):
+        if not hasattr(self, "shb_status_pill"):
+            return
+        hb_cfg = self.config_manager.get_heartbeat_config()
+        status = hb_cfg.get("last_status", "idle")
+        last_run = hb_cfg.get("last_run")
+        is_running = (self.hb_manager and self.hb_manager.is_task_running("global_heartbeat")) or status == "running"
+
+        if is_running:
+            self.shb_spinner.start()
+            self.shb_trigger_btn.set_sensitive(False)
+            self.shb_status_pill.set_text("⏳ EJECUTANDO")
+            self.shb_status_pill.set_css_classes(["status-pill-connecting"])
+            self.shb_trigger_row.set_subtitle("Ejecutando verificación proactiva en segundo plano...")
+        else:
+            self.shb_spinner.stop()
+            self.shb_trigger_btn.set_sensitive(True)
+
+            if status == "silent_ok":
+                self.shb_status_pill.set_text("✓ OK (SILENCIOSO)")
+                self.shb_status_pill.set_css_classes(["status-pill-connected"])
+            elif status == "ok":
+                self.shb_status_pill.set_text("● REPORTE")
+                self.shb_status_pill.set_css_classes(["status-pill-connected"])
+            elif status == "error":
+                self.shb_status_pill.set_text("❌ ERROR")
+                self.shb_status_pill.set_css_classes(["status-pill-error"])
+            else:
+                self.shb_status_pill.set_text("○ EN ESPERA")
+                self.shb_status_pill.set_css_classes(["status-pill-disconnected"])
+
+            if last_run:
+                try:
+                    dt = datetime.datetime.fromisoformat(last_run)
+                    sub = f"Último pulso: {dt.strftime('%H:%M:%S (%d/%m)')}"
+                    res_snippet = hb_cfg.get("last_result", "").strip().replace("\n", " ")
+                    if res_snippet:
+                        sub += f" · {res_snippet[:60]}..."
+                    self.shb_trigger_row.set_subtitle(sub)
+                except Exception:
+                    self.shb_trigger_row.set_subtitle(f"Último pulso: {last_run}")
+            else:
+                self.shb_trigger_row.set_subtitle("Aún no se ha ejecutado ningún pulso")
+
+    def _refresh_shb_automations_list(self):
+        if not hasattr(self, "shb_auto_list_grp"):
+            return
+
+        for r in list(self._shb_auto_rows):
+            try:
+                self.shb_auto_list_grp.remove(r)
+            except Exception:
+                pass
+        self._shb_auto_rows.clear()
+
+        automations = self.config_manager.get_automations()
+
+        if not automations:
+            empty_row = Adw.ActionRow(
+                title="No hay automatizaciones configuradas",
+                subtitle="Haz clic en '➕ Nueva Automatización' para crear una tarea periódica."
+            )
+            self.shb_auto_list_grp.add(empty_row)
+            self._shb_auto_rows.append(empty_row)
+            return
+
+        for auto in automations:
+            aid = auto.get("id", "")
+            name = auto.get("name", "Automatización")
+            is_enabled = auto.get("enabled", False)
+            badge_str = format_schedule_badge(auto)
+            last_run = auto.get("last_run", "")
+            last_status = auto.get("last_status", "idle")
+            is_running = (self.hb_manager and self.hb_manager.is_task_running(aid)) or last_status == "running"
+
+            row = Adw.ActionRow()
+            row.set_title(f"<b>{html.escape(name)}</b>")
+
+            sub_parts = [badge_str]
+            if last_run:
+                try:
+                    dt = datetime.datetime.fromisoformat(last_run)
+                    sub_parts.append(f"Última: {dt.strftime('%H:%M (%d/%m)')}")
+                except Exception:
+                    pass
+            prompt_snip = auto.get("prompt", "").replace("\n", " ").strip()
+            if prompt_snip:
+                sub_parts.append(f'"{prompt_snip[:45]}..."')
+            row.set_subtitle(" · ".join(sub_parts))
+
+            # Status pill
+            status_pill = Gtk.Label()
+            if is_running:
+                status_pill.set_text("⏳")
+                status_pill.add_css_class("status-pill-connecting")
+            elif last_status in ("ok", "silent_ok"):
+                status_pill.set_text("✓")
+                status_pill.add_css_class("status-pill-connected")
+            elif last_status == "error":
+                status_pill.set_text("❌")
+                status_pill.add_css_class("status-pill-error")
+            else:
+                status_pill.set_text("○")
+                status_pill.add_css_class("status-pill-disconnected")
+            row.add_prefix(status_pill)
+
+            # Controls:
+            sw = Gtk.Switch()
+            sw.set_valign(Gtk.Align.CENTER)
+            sw.set_active(is_enabled)
+            def _on_sw_toggled(_sw, _param, target_id=aid):
+                if self.hb_manager:
+                    self.hb_manager.update_automation(target_id, {"enabled": _sw.get_active()})
+            sw.connect("notify::active", _on_sw_toggled)
+            row.add_suffix(sw)
+
+            run_btn = Gtk.Button(icon_name="media-playback-start-symbolic")
+            run_btn.add_css_class("flat")
+            run_btn.set_tooltip_text("Ejecutar ahora")
+            run_btn.set_sensitive(not is_running)
+            run_btn.connect("clicked", lambda _b, target_id=aid: self.hb_manager and self.hb_manager.trigger_automation_now(target_id))
+            row.add_suffix(run_btn)
+
+            edit_btn = Gtk.Button(icon_name="document-edit-symbolic")
+            edit_btn.add_css_class("flat")
+            edit_btn.set_tooltip_text("Editar automatización")
+            edit_btn.connect("clicked", lambda _b, a_data=auto: self._open_shb_automation_editor(a_data))
+            row.add_suffix(edit_btn)
+
+            del_btn = Gtk.Button(icon_name="user-trash-symbolic")
+            del_btn.add_css_class("flat")
+            del_btn.set_tooltip_text("Eliminar automatización")
+            def _on_del(_b, target_id=aid):
+                if self.hb_manager:
+                    self.hb_manager.delete_automation(target_id)
+                self._refresh_shb_automations_list()
+            del_btn.connect("clicked", _on_del)
+            row.add_suffix(del_btn)
+
+            self.shb_auto_list_grp.add(row)
+            self._shb_auto_rows.append(row)
+
+    def _refresh_shb_logs_ui(self):
+        if not hasattr(self, "shb_logs_grp"):
+            return
+
+        for r in list(self._shb_logs_rows):
+            try:
+                self.shb_logs_grp.remove(r)
+            except Exception:
+                pass
+        self._shb_logs_rows.clear()
+
+        logs = self.hb_manager.get_logs() if self.hb_manager else []
+        if not logs:
+            empty_row = Adw.ActionRow(
+                title="No hay registros de ejecución",
+                subtitle="Los pulsos evaluados se registrarán aquí con su duración y herramientas usadas."
+            )
+            self.shb_logs_grp.add(empty_row)
+            self._shb_logs_rows.append(empty_row)
+            return
+
+        for item in logs[:25]:
+            ts = item.get("timestamp", "")
+            sname = item.get("source_name", "Pulso")
+            status = item.get("status", "ok")
+            summary = item.get("summary", "").strip().replace("\n", " ")
+            dur = item.get("duration_sec", 0.0)
+            tools = item.get("tools_used", [])
+
+            time_str = ts
+            try:
+                dt = datetime.datetime.fromisoformat(ts)
+                time_str = dt.strftime("%H:%M:%S · %d/%m")
+            except Exception:
+                pass
+
+            row = Adw.ActionRow()
+            row.set_title(f"<b>{html.escape(sname)}</b>")
+
+            sub_items = [time_str, f"{dur}s"]
+            if tools:
+                sub_items.append(f"{len(tools)} herramientas ({', '.join(tools[:3])})")
+            if summary:
+                sub_items.append(f'"{summary[:50]}..."')
+            row.set_subtitle(" · ".join(sub_items))
+
+            status_pill = Gtk.Label()
+            if status == "silent_ok":
+                status_pill.set_text("HEARTBEAT_OK")
+                status_pill.add_css_class("status-pill-connected")
+            elif status == "ok":
+                status_pill.set_text("REPORTE")
+                status_pill.add_css_class("status-pill-connected")
+            else:
+                status_pill.set_text("ERROR")
+                status_pill.add_css_class("status-pill-error")
+
+            row.add_suffix(status_pill)
+            self.shb_logs_grp.add(row)
+            self._shb_logs_rows.append(row)
 
     def _build_audio_page(self):
         page = Adw.PreferencesPage()

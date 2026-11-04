@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Pequeño Asistente SUDO_ASKPASS Helper
+# Invoked by sudo, ssh, or Git when a graphical password prompt is required.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+PYTHON_BIN="python3"
+
+if [ -f "$REPO_DIR/.venv/bin/python3" ]; then
+    PYTHON_BIN="$REPO_DIR/.venv/bin/python3"
+fi
+
+export PYTHONPATH="$REPO_DIR:$PYTHONPATH"
+exec "$PYTHON_BIN" -m pequeno_asistente.security.askpass "$@"
