@@ -127,7 +127,7 @@ class CallEngine:
     def interrupt_assistant(self):
         """Interrupts assistant speech immediately."""
         self.tts.stop()
-        if hasattr(self.agent, "is_running") and self.agent.is_running:
+        if hasattr(self.agent, "abort"):
             self.agent.abort()
         if self.state in ("assistant_speaking", "thinking"):
             self._set_state("listening", "Escuchando...")
@@ -300,8 +300,27 @@ class CallEngine:
         def on_token(token: str):
             if self._stop_event.is_set():
                 return
+            if self.state == "thinking" and token.strip():
+                self._set_state("assistant_speaking", "Hablando...")
             assistant_full_text.append(token)
             self.on_assistant_token(token)
+
+        def on_thinking(th: str):
+            if self._stop_event.is_set():
+                return
+            if self.state not in ("thinking", "assistant_speaking"):
+                self._set_state("thinking", "Pensando...")
+
+        def on_tool_start(name: str, args: Any):
+            if self._stop_event.is_set():
+                return
+            clean_name = name.split("__")[-1].replace("_", " ")
+            self._set_state("thinking", f"Consultando {clean_name}...")
+
+        def on_tool_end(name: str, res: Any):
+            if self._stop_event.is_set():
+                return
+            self._set_state("thinking", "Pensando...")
 
         def on_error(err: str):
             error_messages.append(err)
@@ -309,15 +328,17 @@ class CallEngine:
 
         callbacks = AgentCallbacks(
             on_token=on_token,
+            on_thinking=on_thinking,
+            on_tool_start=on_tool_start,
+            on_tool_end=on_tool_end,
             on_complete=lambda _final: logger.info("Call turn LLM stream finished."),
             on_error=on_error
         )
 
         # Ensure agent is not already running a prior stuck turn
-        if hasattr(self.agent, "is_running") and self.agent.is_running:
-            logger.warning("Agent was already running prior to starting call turn. Aborting previous turn.")
+        if hasattr(self.agent, "abort"):
             self.agent.abort()
-            time.sleep(0.15)
+            time.sleep(0.05)
 
         # Run agent turn on the background asyncio loop with is_call_mode=True
         future = asyncio.run_coroutine_threadsafe(
@@ -327,7 +348,7 @@ class CallEngine:
 
         timed_out = False
         try:
-            future.result(timeout=35.0)
+            future.result(timeout=40.0)
         except Exception as e:
             timed_out = True
             logger.error(f"Error or timeout waiting for agent response in call: {e}")

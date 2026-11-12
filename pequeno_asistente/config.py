@@ -102,6 +102,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "disabled_skills": [],
         "extra_paths": []
     },
+    "agents": {},
+    "workspaces": {},
     "server": {
         "host": "0.0.0.0",
         "port": 8770,
@@ -133,9 +135,9 @@ class ConfigManager:
                 data = json.load(f)
             
             # Ensure top-level sections exist without overwriting user values
-            for k in ("llm", "ui", "memory", "audio", "mcp_servers", "mcp_registries", "heartbeat", "automations", "skills", "server"):
+            for k in ("llm", "ui", "memory", "audio", "mcp_servers", "mcp_registries", "heartbeat", "automations", "skills", "agents", "workspaces", "server"):
                 if k not in data:
-                    data[k] = json.loads(json.dumps(DEFAULT_CONFIG.get(k, {} if k != "automations" else [])))
+                    data[k] = json.loads(json.dumps(DEFAULT_CONFIG.get(k, {} if k not in ("automations",) else [])))
 
             # Ensure built-in default MCP server ('pequeno-core') is present in mcp_servers
             if not isinstance(data.get("mcp_servers"), dict):
@@ -156,6 +158,11 @@ class ConfigManager:
                 for subk, subv in DEFAULT_CONFIG["skills"].items():
                     if subk not in data["skills"]:
                         data["skills"][subk] = subv
+
+            if "agents" not in data or not isinstance(data.get("agents"), dict):
+                data["agents"] = {}
+            if "workspaces" not in data or not isinstance(data.get("workspaces"), dict):
+                data["workspaces"] = {}
 
             # Ensure basic non-destructive defaults exist inside sections
             for subk, subv in DEFAULT_CONFIG["heartbeat"].items():
@@ -285,6 +292,8 @@ class ConfigManager:
         env_var = PROVIDER_ENV_VARS.get(provider)
         if env_var:
             os.environ[env_var] = key
+        if provider == "vercel":
+            os.environ["AI_GATEWAY_API_KEY"] = key
         self.save()
 
     def get_api_key(self, provider: str) -> str:
@@ -293,6 +302,8 @@ class ConfigManager:
             env_var = PROVIDER_ENV_VARS.get(provider)
             if env_var:
                 key = os.getenv(env_var, "")
+            if not key and provider in ("vercel", "vercel_ai_gateway"):
+                key = os.getenv("AI_GATEWAY_API_KEY", "") or os.getenv("VERCEL_API_KEY", "")
         return key
 
     def get_active_model(self) -> str:
@@ -466,6 +477,56 @@ class ConfigManager:
             disabled_set.discard(skill_id)
         cfg["disabled_skills"] = sorted(list(disabled_set))
         self.save()
+
+    # Specialized Agents Accessors (prompt-only profiles, reusable across workspaces)
+    def get_agents(self) -> Dict[str, Any]:
+        if "agents" not in self.data or not isinstance(self.data["agents"], dict):
+            self.data["agents"] = {}
+        return self.data["agents"]
+
+    def get_agent(self, agent_id: str) -> Optional[Dict[str, Any]]:
+        return self.get_agents().get(agent_id)
+
+    def save_agent(self, agent_id: str, agent_data: Dict[str, Any]):
+        agents = self.get_agents()
+        agent_data = dict(agent_data or {})
+        agent_data["id"] = agent_id
+        # Agents are prompt-specialized and reusable across workspaces (no workspace binding)
+        agent_data.pop("workspace_path", None)
+        agents[agent_id] = agent_data
+        self.save()
+
+    def delete_agent(self, agent_id: str) -> bool:
+        agents = self.get_agents()
+        if agent_id in agents:
+            del agents[agent_id]
+            self.save()
+            return True
+        return False
+
+    # Workspaces Accessors (project/folders + contextual memory per workspace)
+    def get_workspaces(self) -> Dict[str, Any]:
+        if "workspaces" not in self.data or not isinstance(self.data["workspaces"], dict):
+            self.data["workspaces"] = {}
+        return self.data["workspaces"]
+
+    def get_workspace(self, workspace_id: str) -> Optional[Dict[str, Any]]:
+        return self.get_workspaces().get(workspace_id)
+
+    def save_workspace(self, workspace_id: str, workspace_data: Dict[str, Any]):
+        workspaces = self.get_workspaces()
+        workspace_data = dict(workspace_data or {})
+        workspace_data["id"] = workspace_id
+        workspaces[workspace_id] = workspace_data
+        self.save()
+
+    def delete_workspace(self, workspace_id: str) -> bool:
+        workspaces = self.get_workspaces()
+        if workspace_id in workspaces:
+            del workspaces[workspace_id]
+            self.save()
+            return True
+        return False
 
     def get_server_config(self) -> Dict[str, Any]:
         server_cfg = self.data.get("server")

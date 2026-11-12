@@ -52,5 +52,6 @@ export interface StreamCallbacks {
   onQueued?: (position?: number) => void;
   onDequeued?: () => void;
   onComplete: (finalContent: string, threadId: string) => void;
+  onTitleUpdated?: (title: string, threadId: string) => void;
   onError: (error: string) => void;
 }

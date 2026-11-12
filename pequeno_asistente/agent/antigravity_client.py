@@ -129,19 +129,30 @@ class AntigravityClient:
     CODE_ASSIST_ENDPOINT_DAILY_SANDBOX = "https://daily-cloudcode-pa.sandbox.googleapis.com"
     CODE_ASSIST_ENDPOINT_AUTOPUSH = "https://autopush-cloudcode-pa.sandbox.googleapis.com"
 
-    CODE_ASSIST_ENDPOINTS = [
+    # Por defecto solo endpoints públicos (compatibles con cuentas externas).
+    # Los endpoints sandbox/autopush son internos de Google (Sandbox Service Lockdown)
+    # y devuelven 403 (ÜberProxy Error Code 69) para usuarios no internos.
+    CODE_ASSIST_ENDPOINTS_PUBLIC = [
         CODE_ASSIST_ENDPOINT_DAILY,
         CODE_ASSIST_ENDPOINT_PROD,
+    ]
+    CODE_ASSIST_ENDPOINTS_SANDBOX = [
         CODE_ASSIST_ENDPOINT_DAILY_SANDBOX,
         CODE_ASSIST_ENDPOINT_AUTOPUSH,
     ]
+    # Compatibilidad: lista completa (pública + sandbox). No se usa por defecto.
+    CODE_ASSIST_ENDPOINTS = CODE_ASSIST_ENDPOINTS_PUBLIC + CODE_ASSIST_ENDPOINTS_SANDBOX
 
     @classmethod
     def get_endpoints(cls) -> List[str]:
         custom_ep = os.getenv("PEQUENO_ASISTENTE_ANTIGRAVITY_ENDPOINT") or os.getenv("KOGNITERM_ANTIGRAVITY_ENDPOINT")
         if custom_ep:
             return [custom_ep.rstrip("/")]
-        return list(cls.CODE_ASSIST_ENDPOINTS)
+        endpoints = list(cls.CODE_ASSIST_ENDPOINTS_PUBLIC)
+        enable_sandbox = os.getenv("PEQUENO_ASISTENTE_ANTIGRAVITY_ENABLE_SANDBOX", "").strip().lower()
+        if enable_sandbox in ("1", "true", "yes", "on"):
+            endpoints.extend(cls.CODE_ASSIST_ENDPOINTS_SANDBOX)
+        return endpoints
 
     @classmethod
     def get_project_id(cls) -> str:
@@ -230,6 +241,57 @@ class AntigravityClient:
                                         user_parts.append({"text": f"[Imagen: {url[:30]}...]"})
                                 else:
                                     user_parts.append({"text": f"[Imagen URL: {url}]"})
+                            elif item_type == "input_audio":
+                                audio_obj = item.get("input_audio", {})
+                                if isinstance(audio_obj, dict):
+                                    b64_data = audio_obj.get("data", "")
+                                    raw_fmt = (audio_obj.get("mime_type") or audio_obj.get("format") or "wav").lower().strip()
+                                    if b64_data and not b64_data.startswith("[persisted"):
+                                        audio_mime_map = {
+                                            "wav": "audio/wav",
+                                            "mp3": "audio/mp3",
+                                            "mpeg": "audio/mpeg",
+                                            "mpga": "audio/mpeg",
+                                            "ogg": "audio/ogg",
+                                            "oga": "audio/ogg",
+                                            "opus": "audio/ogg",
+                                            "flac": "audio/flac",
+                                            "m4a": "audio/mp4",
+                                            "mp4": "audio/mp4",
+                                            "aac": "audio/aac",
+                                            "webm": "audio/webm",
+                                            "aiff": "audio/aiff",
+                                            "aif": "audio/aiff",
+                                            "amr": "audio/amr",
+                                            "3gp": "audio/3gpp",
+                                        }
+                                        mime_type = raw_fmt if raw_fmt.startswith("audio/") else audio_mime_map.get(raw_fmt, f"audio/{raw_fmt}")
+                                        user_parts.append({
+                                            "inlineData": {
+                                                "mimeType": mime_type,
+                                                "data": b64_data
+                                            }
+                                        })
+                                    else:
+                                        user_parts.append({"text": "[Audio adjunto]"})
+                            elif item_type == "audio_url":
+                                aud_url_obj = item.get("audio_url", {})
+                                url = aud_url_obj.get("url", "") if isinstance(aud_url_obj, dict) else str(aud_url_obj)
+                                if url.startswith("data:"):
+                                    try:
+                                        header, base64_data = url.split(",", 1)
+                                        mime_type = header.split(";")[0].replace("data:", "")
+                                        user_parts.append({
+                                            "inlineData": {
+                                                "mimeType": mime_type,
+                                                "data": base64_data
+                                            }
+                                        })
+                                    except Exception as e:
+                                        logger.warning(f"Error parseando data URL de audio en AntigravityClient: {e}")
+                                        user_parts.append({"text": f"[Audio: {url[:30]}...]"})
+                                else:
+                                    user_parts.append({"text": f"[Audio URL: {url}]"})
                         elif isinstance(item, str):
                             user_parts.append({"text": item})
                 elif isinstance(content, str):
@@ -717,7 +779,7 @@ class AntigravityClient:
             
             if is_gemini_3:
                 # For Gemini 3.x / 3.5, use thinkingLevel
-                thinking_level = os.getenv("KOGNITERM_THINKING_LEVEL")
+                thinking_level = kwargs.get("thinking_level") or os.getenv("KOGNITERM_THINKING_LEVEL")
                 if not thinking_level:
                     # Default to MEDIUM for flash, HIGH for pro/agent
                     if "pro" in model_lower or "agent" in model_lower:
@@ -737,11 +799,18 @@ class AntigravityClient:
                 logger.info(f"Enabling thinkingConfig with includeThoughts=True and thinkingLevel {thinking_level_upper} for Gemini 3+ model {model}")
             else:
                 # For Gemini 2.5 / 2.0, use thinkingBudget
-                budget_str = os.getenv("KOGNITERM_THINKING_BUDGET")
-                try:
-                    budget = int(budget_str) if budget_str else 2048
-                except ValueError:
-                    budget = 2048
+                budget_val = kwargs.get("thinking_budget")
+                if budget_val is not None:
+                    try:
+                        budget = int(budget_val)
+                    except ValueError:
+                        budget = 2048
+                else:
+                    budget_str = os.getenv("KOGNITERM_THINKING_BUDGET")
+                    try:
+                        budget = int(budget_str) if budget_str else 2048
+                    except ValueError:
+                        budget = 2048
                 generation_config["thinkingConfig"] = {
                     "includeThoughts": True,
                     "thinkingBudget": budget

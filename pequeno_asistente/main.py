@@ -14,17 +14,30 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from pequeno_asistente.config import ConfigManager
+from pequeno_asistente.log_stream import setup_realtime_logging, LOG_FILE_PATH
 from pequeno_asistente.agent.memory import MemoryManager
 from pequeno_asistente.agent.thread_manager import ThreadManager
 from pequeno_asistente.mcp_client.manager import MCPManager
 from pequeno_asistente.agent.core import AgentCore
 from pequeno_asistente.ui.tray import send_toggle_command, send_new_thread_command, send_quit_command, ToggleSocketServer
 
-# Setup logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+# Setup real-time file + broadcaster + stderr logging
+setup_realtime_logging(level=logging.INFO)
 logger = logging.getLogger("pequeno_asistente")
 
 def main():
+    # Handle --logs / -l command line arguments to tail real-time logs in terminal
+    if "--logs" in sys.argv:
+        import subprocess
+        print(f"📡 Siguiendo registros en tiempo real desde: {LOG_FILE_PATH} (Ctrl+C para salir)\n")
+        LOG_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        LOG_FILE_PATH.touch(exist_ok=True)
+        try:
+            subprocess.run(["tail", "-n", "80", "-f", str(LOG_FILE_PATH)])
+        except KeyboardInterrupt:
+            pass
+        sys.exit(0)
+
     # Handle --quit / -q command line arguments
     if "--quit" in sys.argv or "-q" in sys.argv:
         if send_quit_command():

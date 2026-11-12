@@ -8,20 +8,24 @@ import json
 import asyncio
 import threading
 import logging
+from pathlib import Path
 from typing import Dict, List, Any, Optional, Callable, AsyncIterator
 import litellm
 
 from pequeno_asistente.config import ConfigManager
 from pequeno_asistente.mcp_client.manager import MCPManager
 from pequeno_asistente.agent.memory import MemoryManager
-from pequeno_asistente.agent.thread_manager import ThreadManager
+from pequeno_asistente.agent.thread_manager import ThreadManager, clean_llm_title, clean_thread_title
 from pequeno_asistente.agent.antigravity_client import AntigravityClient
 from pequeno_asistente.agent.media_processor import (
     is_model_multimodal,
+    is_model_audio_multimodal,
     extract_file_paths_from_text,
     process_image,
+    process_audio,
     process_document,
     is_image_file,
+    is_audio_file,
     is_document_file,
     resolve_local_path,
 )
@@ -42,6 +46,7 @@ REGLAS FUNDAMENTALES Y DISCIPLINA DE HERRAMIENTAS:
 2. DISCIPLINA ESTRICTA DE HERRAMIENTAS (¡CRÍTICO!):
    - NUNCA ejecutes herramientas ante saludos ("Hola", "¿cómo estás?", "buenos días", etc.), agradecimientos, despedidas, preguntas conceptuales o conversación general. Para tales casos, responde SIEMPRE de forma directa con texto.
    - SÓLO debes invocar una herramienta cuando el usuario pida expresamente una acción sobre su sistema o requiera datos en tiempo real (ej. consultar la hora, listar/leer archivos, capturar pantalla, consultar el clima).
+   - ¡NO USES HERRAMIENTAS DE TERMINAL/SCRIPTS PARA ANALIZAR ARCHIVOS DE AUDIO ADJUNTOS!: Si el usuario adjunta o te envía un archivo de audio para que lo escuches o analices, YA TIENES el contenido sonoro real inyectado en tu contexto multimodal. ESTÁ PROHIBIDO ejecutar comandos de terminal, scripts de Python (`wave`, `astats`), o `ffmpeg` para intentar "analizar" el audio por consola. Responde DIRECTAMENTE con tu análisis auditivo multimodal como respuesta final en texto, sin llamar a ninguna herramienta de consola o terminal.
    - NUNCA llames a herramientas irrelevantes o no relacionadas con la solicitud. Si no tienes la herramienta adecuada para cumplir lo que el usuario pide, explícaselo en texto natural con total transparencia.
    - Tras obtener el resultado de una herramienta, sintetiza inmediatamente tu respuesta final al usuario. No invoques más herramientas salvo que sea imprescindible para completar el requerimiento.
 3. HABILIDADES Y PROCEDIMIENTOS (SKILLS) — PRIORIDAD Y RIGOR:
@@ -82,13 +87,19 @@ REGLAS FUNDAMENTALES Y DISCIPLINA DE HERRAMIENTAS:
 6. AUTOMATIZACIONES Y HEARTBEATS (PULSOS PROACTIVOS):
    - Cuentas con un motor nativo de Automatizaciones y Heartbeats configurable tanto en la interfaz gráfica (`Ctrl+B` o botón de reloj/pulso en la barra superior, y en Configuración ➔ Heartbeats) como mediante las herramientas `automation__list`, `automation__create`, `automation__update`, `automation__delete` y `automation__configure_heartbeat`.
    - Si el usuario te pide programar una tarea periódica, un recordatorio recurrente, un chequeo de sistema (Heartbeat) o actualizar su archivo `HEARTBEAT.md`, utiliza directamente las herramientas `automation__*`.
-7. LECTURA DE DOCUMENTOS, IMÁGENES Y ARCHIVOS ADJUNTOS (MCP POR DEFECTO `pequeno-core`):
+8. 7. LECTURA DE DOCUMENTOS, IMÁGENES, AUDIO Y ARCHIVOS ADJUNTOS (MCP POR DEFECTO `pequeno-core`):
    - Cuentas con el servidor MCP nativo por defecto `pequeno-core` que expone todas las herramientas base (`memory__*`, `skills__*`, `automation__*`, `security__*` y `media__*`).
-   - Cuando el usuario adjunta documentos o imágenes desde la interfaz o menciona rutas locales en su mensaje, el sistema procesa automáticamente los documentos e inyecta las imágenes visualmente si tu modelo activo es multimodal.
-   - Si necesitas leer o inspeccionar cualquier documento o imagen adicional por su ruta en el sistema de archivos:
+   - Cuando el usuario adjunta documentos, imágenes o archivos de audio desde la interfaz o menciona rutas locales en su mensaje, el sistema procesa automáticamente los documentos e inyecta las imágenes y el audio directamente en tu contexto multimodal si tu modelo activo lo soporta.
+   - DIRECTIVA CRÍTICA DE ESCUCHA MULTIMODAL DE AUDIO (¡PROHIBIDO ALUCINAR!):
+     * Cuando recibes un archivo de audio adjunto o inyectado con `mode="multimodal_audio"`, tu modelo recibe las ondas sonoras reales directamente en sus capas de atención multimodal.
+     * DEBES escuchar y analizar exclusivamente lo que suena en el audio (instrumentación real, timbres acústicos o sintetizados, tempo percibido, silencios y dinámica).
+     * NUNCA inventes o deduzcas letras, voces, historias, diálogos o instrumentos imaginarios basándote únicamente en el nombre del archivo (ejemplo: si el archivo se llama "membrana.wav", no asumas que trata de una membrana física ni inventes cantantes o géneros estereotipados).
+     * Si el audio es instrumental o un stem musical, descríbelo con precisión objetiva como tal.
+   - Si necesitas leer, escuchar o inspeccionar cualquier documento, imagen o archivo de audio adicional por su ruta en el sistema de archivos:
      * `media__read_document(path, start_page, end_page, max_chars, search_query)`: Extrae texto estructurado, tablas Markdown y metadatos de archivos PDF, DOCX, ODT, XLSX, PPTX, CSV, TSV, EPUB, HTML, RTF, Markdown, JSON y código fuente.
      * `media__read_image(path, extract_ocr, max_dimension)`: Inspecciona y carga imágenes locales (PNG, JPG, WEBP, GIF, BMP, SVG, TIFF). Si tu modelo es multimodal, al invocar esta herramienta la imagen se inyectará automáticamente en tu contexto visual para que puedas verla y analizarla; además puedes activar `extract_ocr=True` para extraer texto por OCR.
-     * `media__inspect_file(path)`: Inspecciona metadatos detallados (tamaño, tipo MIME, permisos, páginas o dimensiones) de cualquier ruta local antes de leerla.
+     * `media__read_audio(path)`: Inspecciona y carga archivos de audio locales (WAV, MP3, OGG, OPUS, FLAC, M4A, AAC, WEBM, AIFF). Si tu modelo soporta procesamiento multimodal de audio, al invocar esta herramienta el audio se inyectará directamente en tu contexto multimodal (`input_audio` / `inlineData`) para que puedas escucharlo y analizarlo con tus capacidades multimodales nativas.
+     * `media__inspect_file(path)`: Inspecciona metadatos detallados (tamaño, tipo MIME, permisos, páginas, duración/frecuencia o dimensiones) de cualquier ruta local antes de leerla.
 8. ESTILO:
    - Respuestas claras, concisas, estructuradas en Markdown legible.
 """
@@ -194,7 +205,17 @@ def prepare_provider_call(model_name: str, config_manager: ConfigManager) -> tup
             "X-Title": "Pequeño Asistente"
         }
 
-    # 8. Google Gemini
+    # 8. Vercel AI Gateway (OpenAI-compatible)
+    elif model_lower.startswith("vercel/") or provider in ("vercel", "vercel_ai_gateway"):
+        pure = model_name.split("/", 1)[1] if model_name.startswith("vercel/") else model_name
+        kwargs["model"] = f"openai/{pure}"
+        kwargs["api_base"] = "https://ai-gateway.vercel.sh/v1"
+        kwargs["custom_llm_provider"] = "openai"
+        key = config_manager.get_api_key("vercel")
+        if key:
+            kwargs["api_key"] = key
+
+    # 9. Google Gemini
     elif model_lower.startswith("gemini/") or provider == "google":
         pure = model_name.split("/", 1)[1] if model_name.startswith("gemini/") else model_name
         kwargs["model"] = f"gemini/{pure}"
@@ -344,7 +365,8 @@ class AgentCallbacks:
         on_tool_start: Optional[Callable[[str, Dict[str, Any]], None]] = None,
         on_tool_end: Optional[Callable[[str, str], None]] = None,
         on_complete: Optional[Callable[[str], None]] = None,
-        on_error: Optional[Callable[[str], None]] = None
+        on_error: Optional[Callable[[str], None]] = None,
+        on_thread_title_updated: Optional[Callable[[str, str], None]] = None
     ):
         self.on_token = on_token or (lambda text: None)
         self.on_thinking = on_thinking or (lambda text: None)
@@ -352,6 +374,7 @@ class AgentCallbacks:
         self.on_tool_end = on_tool_end or (lambda name, res: None)
         self.on_complete = on_complete or (lambda text: None)
         self.on_error = on_error or (lambda err: None)
+        self.on_thread_title_updated = on_thread_title_updated or (lambda tid, title: None)
 
 
 class QueuedTurn:
@@ -384,6 +407,7 @@ class SessionState:
         self.current_task: Optional[asyncio.Task] = None
         self.queue: List[QueuedTurn] = []
         self.speech_finish_event: Optional[asyncio.Event] = None
+        self.title_task: Optional[asyncio.Task] = None
 
     def clear_queue(self):
         """Cancels and clears all pending turns in the queue."""
@@ -413,6 +437,36 @@ class AgentCore:
         self.sessions: Dict[str, SessionState] = {}
         self.active_thread_id: Optional[str] = None
         self._default_history: List[Dict[str, Any]] = []
+        self._title_listeners: List[Callable[[str, str], None]] = []
+
+    def add_title_listener(self, fn: Callable[[str, str], None]):
+        """Registers a global listener for thread title changes: fn(thread_id, new_title)."""
+        if fn not in self._title_listeners:
+            self._title_listeners.append(fn)
+
+    def remove_title_listener(self, fn: Callable[[str, str], None]):
+        """Removes a registered thread title change listener."""
+        if fn in self._title_listeners:
+            self._title_listeners.remove(fn)
+
+    def _notify_title_updated(
+        self,
+        thread_id: str,
+        title: str,
+        callbacks: Optional[AgentCallbacks] = None
+    ):
+        """Notifies callbacks and registered global listeners of a title change."""
+        if callbacks and callbacks.on_thread_title_updated:
+            try:
+                callbacks.on_thread_title_updated(thread_id, title)
+            except Exception as e:
+                logger.error(f"Error calling on_thread_title_updated callback: {e}")
+
+        for fn in list(self._title_listeners):
+            try:
+                fn(thread_id, title)
+            except Exception as e:
+                logger.error(f"Error in title listener: {e}")
 
     @property
     def history(self) -> List[Dict[str, Any]]:
@@ -501,15 +555,24 @@ class AgentCore:
         self.thread_manager.active_thread_id = thread_id
         return session.history
 
-    def new_thread(self, title: str = "Nueva conversación", reuse_empty: bool = False) -> Dict[str, Any]:
-        """Starts a fresh new conversation thread without interrupting running background threads."""
+    def new_thread(
+        self,
+        title: str = "Nueva conversación",
+        reuse_empty: bool = False,
+        agent_id: Optional[str] = None,
+        agent_profile: Optional[Dict[str, Any]] = None,
+        workspace_id: Optional[str] = None,
+        workspace_profile: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Starts a fresh new conversation thread without interrupting running background threads.
+        Can bind to a workspace (project folders + contextual memory) and/or an agent (prompt-only)."""
         if self.thread_manager:
             # If requested and current active thread is already empty and not running, reuse it
-            if reuse_empty and self.active_thread_id:
+            if reuse_empty and self.active_thread_id and not agent_profile and not agent_id and not workspace_profile and not workspace_id:
                 cur_sess = self.sessions.get(self.active_thread_id)
                 if cur_sess and not cur_sess.is_running and not cur_sess.history:
                     cur_th = self.thread_manager.get_thread(self.active_thread_id)
-                    if cur_th and len(cur_th.get("messages", [])) == 0:
+                    if cur_th and len(cur_th.get("messages", [])) == 0 and not cur_th.get("workspace_profile") and not cur_th.get("agent_profile"):
                         return cur_th
 
             # Save current thread history before switching if not running
@@ -518,7 +581,13 @@ class AgentCore:
                 if cur_sess and not cur_sess.is_running and cur_sess.history:
                     self.thread_manager.save_thread(self.active_thread_id, cur_sess.history)
 
-            thread_data = self.thread_manager.create_thread(title=title)
+            thread_data = self.thread_manager.create_thread(
+                title=title,
+                agent_id=agent_id,
+                agent_profile=agent_profile,
+                workspace_id=workspace_id,
+                workspace_profile=workspace_profile
+            )
             tid = thread_data["id"]
             self.sessions[tid] = SessionState(tid, [])
             self.active_thread_id = tid
@@ -527,7 +596,16 @@ class AgentCore:
         tid = "default"
         self.sessions[tid] = SessionState(tid, [])
         self.active_thread_id = tid
-        return {"id": tid, "title": title, "messages": []}
+        data: Dict[str, Any] = {"id": tid, "title": title, "messages": []}
+        if agent_id:
+            data["agent_id"] = agent_id
+        if agent_profile:
+            data["agent_profile"] = agent_profile
+        if workspace_id:
+            data["workspace_id"] = workspace_id
+        if workspace_profile:
+            data["workspace_profile"] = workspace_profile
+        return data
 
     def clear_history(self, thread_id: Optional[str] = None):
         """Explicitly clears messages in the specified thread (or active thread)."""
@@ -578,13 +656,45 @@ class AgentCore:
             sess.clear_queue()
             if sess.speech_finish_event:
                 sess.speech_finish_event.set()
-            logger.info(f"Abort requested and queue cleared for session {target_id}")
+            if sess.current_task and not sess.current_task.done():
+                sess.current_task.cancel()
+            sess.is_running = False
+            logger.info(f"Abort requested and task cancelled for session {target_id}")
         elif not target_id:
             for s in self.sessions.values():
                 s.abort_requested = True
                 s.clear_queue()
                 if s.speech_finish_event:
                     s.speech_finish_event.set()
+                if s.current_task and not s.current_task.done():
+                    s.current_task.cancel()
+                s.is_running = False
+
+    def _read_workspace_context_memory(self, workspace_profile: Dict[str, Any], max_chars: int = 6000) -> str:
+        """Reads the contextual memory file associated with a workspace/project."""
+        if not workspace_profile:
+            return ""
+        mem_path = (workspace_profile.get("memory_file") or "").strip()
+        if not mem_path:
+            return ""
+        try:
+            p = Path(mem_path).expanduser()
+            if not p.is_absolute():
+                # resolve relative to first workspace folder if available
+                folders = workspace_profile.get("folders") or []
+                if not folders and workspace_profile.get("workspace_path"):
+                    folders = [workspace_profile.get("workspace_path")]
+                if folders:
+                    p = Path(folders[0]).expanduser() / p
+            p = p.resolve()
+            if p.exists() and p.is_file():
+                text = p.read_text(encoding="utf-8", errors="replace").strip()
+                if len(text) > max_chars:
+                    text = text[:max_chars].rstrip() + "\n\n[...memoria contextual del workspace truncada...]"
+                return text
+        except Exception as e:
+            logger.debug(f"Could not read workspace memory file: {e}")
+        return ""
 
     def _build_system_prompt(
         self,
@@ -592,23 +702,93 @@ class AgentCore:
         is_call_mode: bool = False,
         thread_id: Optional[str] = None
     ) -> str:
-        parts = [BASE_SYSTEM_PROMPT]
+        target_tid = thread_id or self.active_thread_id
+        agent_profile: Optional[Dict[str, Any]] = None
+        workspace_profile: Optional[Dict[str, Any]] = None
+        if self.thread_manager and target_tid:
+            agent_profile = self.thread_manager.get_agent_profile(target_tid)
+            workspace_profile = self.thread_manager.get_workspace_profile(target_tid)
+
+        # Agent: specialized prompt reusable across workspaces
+        base_prompt = BASE_SYSTEM_PROMPT
+        if agent_profile and isinstance(agent_profile.get("system_prompt"), str):
+            custom_prompt = agent_profile.get("system_prompt", "").strip()
+            if custom_prompt:
+                base_prompt = custom_prompt
+
+        parts = [base_prompt]
         if is_call_mode:
             parts.append(
                 "# MODO LLAMADA DE VOZ ACTIVO (VOICE CALL MODE)\n"
                 "Estás interactuando por voz en tiempo real con el usuario mediante una llamada telefónica/conversación fluida.\n"
-                "1. Sé conversacional, natural, empático y conciso. Responde en 1 a 3 frases claras.\n"
-                "2. NO utilices formato Markdown pesado (como tablas, bloques de código, listas largas o títulos) porque tu respuesta será leída directamente por un sintetizador de voz (TTS).\n"
-                "3. Si necesitas ejecutar una herramienta para cumplir lo que el usuario pide, ejecútala de inmediato.\n"
-                "4. ¡REGLA CRÍTICA ANTE ERRORES!: Si una herramienta falla, arroja un error o no está disponible, NUNCA intentes ejecutar comandos de consola (terminal, bash, curl, grep, etc.) para depurar o diagnosticar la herramienta en segundo plano. Detén inmediatamente la secuencia de herramientas y explícale con total amabilidad y brevedad al usuario lo ocurrido por voz para que decida qué hacer."
+                "1. PRIORIDAD TOTAL A LA VOZ: Sé conversacional, natural, empático y conciso. Responde en 1 a 3 frases claras.\n"
+                "2. DISCIPLINA ESTRICTA DE HERRAMIENTAS: NO invoques herramientas de consola, bash o procesos en segundo plano para conversación, dudas o preguntas. SÓLO ejecuta una herramienta si el usuario te pide expresamente una acción concreta sobre su sistema.\n"
+                "3. PROHIBICIÓN DE FORMATO: NO utilices Markdown pesado (tablas, bloques de código, listas largas o títulos) porque tu respuesta será leída directamente por un sintetizador de voz (TTS).\n"
+                "4. ¡REGLA CRÍTICA ANTE ERRORES!: Si una herramienta falla o no está disponible, NUNCA intentes ejecutar comandos de consola para diagnosticarla. Detén inmediatamente la secuencia de herramientas y dile brevemente al usuario lo ocurrido por voz."
             )
+
+        # Workspace: project folders + contextual memory (independent chat threads per workspace/project)
+        if workspace_profile:
+            ws_name = (workspace_profile.get("name") or "").strip()
+            ws_desc = (workspace_profile.get("description") or "").strip()
+            folders = workspace_profile.get("folders") or []
+            if not folders and workspace_profile.get("workspace_path"):
+                folders = [workspace_profile.get("workspace_path")]
+            folders = [str(f).strip() for f in folders if f]
+            mem_file = (workspace_profile.get("memory_file") or "").strip()
+
+            ws_lines = ["<workspace_context>"]
+            if ws_name:
+                ws_lines.append(f"- Workspace / proyecto: {ws_name}")
+            if ws_desc:
+                ws_lines.append(f"- Descripción: {ws_desc}")
+            if folders:
+                if len(folders) == 1:
+                    ws_lines.append(f"- Carpeta asociada: {folders[0]}")
+                else:
+                    ws_lines.append("- Carpetas asociadas:")
+                    for f in folders:
+                        ws_lines.append(f"  • {f}")
+                ws_lines.append(
+                    "Directivas de workspace: esta conversación pertenece a este workspace/proyecto. "
+                    "Prioriza leer, crear y modificar archivos dentro de las carpetas asociadas cuando sea pertinente, "
+                    "manteniendo el contexto del proyecto."
+                )
+            if mem_file:
+                ws_lines.append(f"- Archivo de memoria contextual del workspace: {mem_file}")
+                mem_content = self._read_workspace_context_memory(workspace_profile)
+                if mem_content:
+                    ws_lines.append("")
+                    ws_lines.append("Memoria contextual del workspace (información persistente del proyecto):")
+                    ws_lines.append(mem_content)
+                else:
+                    ws_lines.append("(El archivo de memoria contextual existe/configurado pero está vacío o no disponible aún.)")
+            if len(ws_lines) > 1:
+                ws_lines.append("</workspace_context>")
+                parts.append("\n".join(ws_lines))
+
+        # Agent prompt specialization (reusable across all workspaces)
+        if agent_profile:
+            profile_lines = ["<specialized_agent>"]
+            name = (agent_profile.get("name") or "").strip()
+            desc = (agent_profile.get("description") or "").strip()
+            if name:
+                profile_lines.append(f"- Nombre del agente: {name}")
+            if desc:
+                profile_lines.append(f"- Descripción/rol: {desc}")
+            profile_lines.append(
+                "- Nota: este agente especializado (prompt) puede utilizarse en cualquier workspace; "
+                "adapta su comportamiento al contexto del workspace activo si existe."
+            )
+            if len(profile_lines) > 1:
+                profile_lines.append("</specialized_agent>")
+                parts.append("\n".join(profile_lines))
 
         memory_prompt = self.memory_manager.get_memory_context_prompt(current_query=query)
         if memory_prompt:
             parts.append(memory_prompt)
 
         # Thread working memory / scratchpad (isolated per thread)
-        target_tid = thread_id or self.active_thread_id
         if self.thread_manager and target_tid:
             scratchpad_prompt = self.thread_manager.format_scratchpad_prompt(target_tid)
             if scratchpad_prompt:
@@ -630,11 +810,14 @@ class AgentCore:
         Processes explicit user attachments and auto-detected file paths in user_message.
         - If an image is attached/referenced and the active model is multimodal, converts it
           into an OpenAI/LiteLLM/Antigravity-compatible `image_url` data URI content part.
+        - If an audio file is attached/referenced and the active model supports multimodal audio,
+          converts it into an `input_audio` content part so the model listens to it natively.
         - If a document is attached/referenced, extracts its structured text and metadata
           automatically so the model can read it immediately.
         Returns `(content_payload, attachment_metadata_list)`.
         """
         multimodal = is_model_multimodal(model, provider)
+        audio_multimodal = is_model_audio_multimodal(model, provider)
         combined_paths: List[str] = []
         seen_paths = set()
 
@@ -644,7 +827,7 @@ class AgentCore:
                 seen_paths.add(resolved)
                 combined_paths.append(resolved)
 
-        # Also auto-detect explicit local image/document paths written in the user prompt
+        # Also auto-detect explicit local image/audio/document paths written in the user prompt
         for p in extract_file_paths_from_text(user_message):
             resolved = str(resolve_local_path(p))
             if resolved and resolved not in seen_paths and os.path.isfile(resolved):
@@ -656,17 +839,19 @@ class AgentCore:
 
         attachment_metas: List[Dict[str, Any]] = []
         enriched_text_blocks: List[str] = []
-        image_parts: List[Dict[str, Any]] = []
+        media_parts: List[Dict[str, Any]] = []
 
         if user_message and user_message.strip():
             enriched_text_blocks.append(user_message)
 
         for path in combined_paths:
             if is_image_file(path):
+                # Always process image with Base64 payload so multimodal models can inspect it directly.
+                # If the active model is not multimodal, the API provider will raise an error accordingly.
                 img_info = process_image(
                     path,
-                    include_base64=multimodal,
-                    extract_ocr=(not multimodal)
+                    include_base64=True,
+                    extract_ocr=False
                 )
                 meta = {
                     "path": path,
@@ -681,8 +866,8 @@ class AgentCore:
                 attachment_metas.append(meta)
 
                 dims = f"{meta['width']}x{meta['height']}px" if meta["width"] and meta["height"] else "dimensiones desconocidas"
-                if multimodal and img_info.get("data_url"):
-                    image_parts.append({
+                if img_info.get("data_url"):
+                    media_parts.append({
                         "type": "image_url",
                         "image_url": {"url": img_info["data_url"]}
                     })
@@ -691,13 +876,53 @@ class AgentCore:
                         f"dimensions=\"{dims}\" size=\"{meta['size_human']}\" mode=\"multimodal_vision\" />"
                     )
                 else:
-                    ocr_txt = img_info.get("ocr_text") or "(Sin texto OCR detectado)"
+                    err_msg = img_info.get("error", "No se pudo leer la imagen")
                     enriched_text_blocks.append(
-                        f"\n<attached_image name=\"{meta['name']}\" path=\"{path}\" "
-                        f"dimensions=\"{dims}\" size=\"{meta['size_human']}\" mode=\"text_fallback\">\n"
-                        f"Nota: El modelo actual ({model}) no es multimodal o no pudo recibir imagen binaria.\n"
-                        f"Texto extraído por OCR:\n{ocr_txt}\n"
-                        f"</attached_image>"
+                        f"\n<attached_image name=\"{meta['name']}\" path=\"{path}\" error=\"{err_msg}\" />"
+                    )
+            elif is_audio_file(path):
+                aud_info = process_audio(
+                    path,
+                    include_base64=audio_multimodal,
+                    target_provider=provider,
+                    target_model=model
+                )
+                meta = {
+                    "path": path,
+                    "name": aud_info.get("name", os.path.basename(path)),
+                    "type": "audio",
+                    "format": aud_info.get("format", "AUDIO"),
+                    "audio_format": aud_info.get("audio_format", "wav"),
+                    "mime_type": aud_info.get("mime_type", "audio/wav"),
+                    "duration_seconds": aud_info.get("duration_seconds", 0.0),
+                    "duration_human": aud_info.get("duration_human", ""),
+                    "sample_rate": aud_info.get("sample_rate", 0),
+                    "channels": aud_info.get("channels", 0),
+                    "size_bytes": aud_info.get("size_bytes", 0),
+                    "size_human": aud_info.get("size_human", ""),
+                }
+                attachment_metas.append(meta)
+
+                dur_attr = f" duration=\"{meta['duration_human']}\"" if meta.get("duration_human") else ""
+                sr_attr = f" sample_rate=\"{meta['sample_rate']}Hz\"" if meta.get("sample_rate") else ""
+                if audio_multimodal and aud_info.get("input_audio"):
+                    media_parts.append({
+                        "type": "input_audio",
+                        "input_audio": {
+                            "data": aud_info["input_audio"]["data"],
+                            "format": aud_info["input_audio"]["format"],
+                        }
+                    })
+                    enriched_text_blocks.append(
+                        f"\n<attached_audio name=\"{meta['name']}\" path=\"{path}\" "
+                        f"format=\"{meta['format']}\"{dur_attr}{sr_attr} size=\"{meta['size_human']}\" mode=\"multimodal_audio\" />"
+                    )
+                else:
+                    enriched_text_blocks.append(
+                        f"\n<attached_audio name=\"{meta['name']}\" path=\"{path}\" "
+                        f"format=\"{meta['format']}\"{dur_attr}{sr_attr} size=\"{meta['size_human']}\" mode=\"unsupported_audio_model\">\n"
+                        f"Nota: El modelo actual ({model}) no soporta procesamiento multimodal directo de audio.\n"
+                        f"</attached_audio>"
                     )
             else:
                 doc_info = process_document(path)
@@ -724,9 +949,9 @@ class AgentCore:
                 )
 
         combined_text = "\n".join(enriched_text_blocks).strip()
-        if image_parts:
+        if media_parts:
             content_payload: List[Dict[str, Any]] = [{"type": "text", "text": combined_text}]
-            content_payload.extend(image_parts)
+            content_payload.extend(media_parts)
             return content_payload, attachment_metas
 
         return combined_text, attachment_metas
@@ -753,24 +978,33 @@ class AgentCore:
         session = self.get_or_create_session(target_thread_id)
 
         if session.is_running:
-            loop = asyncio.get_running_loop()
-            fut = loop.create_future()
-            queued = QueuedTurn(
-                user_message=user_message,
-                callbacks=callbacks,
-                is_call_mode=is_call_mode,
-                thread_id=target_thread_id,
-                on_dequeued=on_dequeued,
-                attachments=attachments
-            )
-            queued.future = fut
-            session.queue.append(queued)
-            logger.info(f"Session {target_thread_id} already executing. Enqueued message (depth: {len(session.queue)}).")
-            try:
-                await fut
-            except asyncio.CancelledError:
-                logger.info(f"Queued message in session {target_thread_id} was cancelled.")
-            return
+            if is_call_mode:
+                logger.info(f"Session {target_thread_id} busy, interrupting prior turn immediately for voice call.")
+                if session.current_task and not session.current_task.done():
+                    session.current_task.cancel()
+                session.abort_requested = True
+                session.clear_queue()
+                session.is_running = False
+                await asyncio.sleep(0.05)
+            else:
+                loop = asyncio.get_running_loop()
+                fut = loop.create_future()
+                queued = QueuedTurn(
+                    user_message=user_message,
+                    callbacks=callbacks,
+                    is_call_mode=is_call_mode,
+                    thread_id=target_thread_id,
+                    on_dequeued=on_dequeued,
+                    attachments=attachments
+                )
+                queued.future = fut
+                session.queue.append(queued)
+                logger.info(f"Session {target_thread_id} already executing. Enqueued message (depth: {len(session.queue)}).")
+                try:
+                    await fut
+                except asyncio.CancelledError:
+                    logger.info(f"Queued message in session {target_thread_id} was cancelled.")
+                return
 
         session.is_running = True
         session.abort_requested = False
@@ -832,11 +1066,15 @@ class AgentCore:
                     logger.error(f"Error in dequeued turn: {e}")
                     if next_turn.future and not next_turn.future.done():
                         next_turn.future.set_exception(e)
+        except asyncio.CancelledError:
+            callbacks.on_error("Operación cancelada.")
+            raise
         finally:
             session.is_running = False
             session.abort_requested = False
             session.current_task = None
             session.speech_finish_event = None
+            session.clear_queue()
             if self.thread_manager:
                 self.thread_manager.save_thread(target_thread_id, session.history)
 
@@ -865,8 +1103,9 @@ class AgentCore:
         model = self.config_manager.get_active_model()
         provider = self.config_manager.get_active_provider()
         multimodal = is_model_multimodal(model, provider)
+        audio_multimodal = is_model_audio_multimodal(model, provider)
 
-        # Process attachments & auto-detected paths (documents & multimodal images)
+        # Process attachments & auto-detected paths (documents, multimodal images & multimodal audio)
         content_payload, attachment_metas = self._prepare_multimodal_user_turn(
             user_message=user_message,
             attachments=attachments,
@@ -887,7 +1126,7 @@ class AgentCore:
         if self.thread_manager:
             self.thread_manager.save_thread(target_thread_id, session.history)
 
-        max_turns = 4 if is_call_mode else 25
+        max_turns = 2 if is_call_mode else 25
         turn_count = 0
         final_text = ""
         seen_calls = set()
@@ -903,50 +1142,70 @@ class AgentCore:
                     thread_id=target_thread_id
                 )
 
-                # Clean history for standard API payload (and rehydrate stripped image_url parts if needed)
+                # Clean history for standard API payload (and rehydrate stripped image_url / input_audio parts if needed)
                 clean_history = []
                 for msg in session.history:
                     clean_msg = {k: v for k, v in msg.items() if k in ("role", "content", "tool_calls", "tool_call_id", "name")}
                     if (
                         clean_msg.get("role") == "user"
-                        and multimodal
-                        and msg.get("attachments")
                         and isinstance(clean_msg.get("content"), list)
                     ):
-                        # Rehydrate any stripped base64 image parts from disk if they were saved without data_url
+                        # Rehydrate any stripped base64 image/audio parts from disk if they were saved without payload.
+                        # Always preserve images so multimodal models receive them directly.
                         rehydrated_parts = []
                         has_valid_image = False
+                        has_valid_audio = False
                         for part in clean_msg["content"]:
                             if isinstance(part, dict) and part.get("type") == "image_url":
                                 url_val = part.get("image_url", {}).get("url", "")
                                 if url_val.startswith("data:"):
                                     has_valid_image = True
                                     rehydrated_parts.append(part)
+                            elif isinstance(part, dict) and part.get("type") == "input_audio":
+                                if audio_multimodal:
+                                    audio_data = part.get("input_audio", {}).get("data", "")
+                                    if audio_data and audio_data != "[persisted_attachment]":
+                                        has_valid_audio = True
+                                        rehydrated_parts.append(part)
                             else:
                                 rehydrated_parts.append(part)
-                        if not has_valid_image:
-                            for att in msg.get("attachments", []):
-                                if att.get("type") == "image" and att.get("path") and os.path.isfile(att["path"]):
-                                    img_res = process_image(att["path"], include_base64=True)
-                                    if img_res.get("data_url"):
-                                        rehydrated_parts.append({
-                                            "type": "image_url",
-                                            "image_url": {"url": img_res["data_url"]}
-                                        })
-                        clean_msg["content"] = rehydrated_parts
-                    elif (
-                        clean_msg.get("role") == "user"
-                        and not multimodal
-                        and isinstance(clean_msg.get("content"), list)
-                    ):
-                        # Convert multimodal content list to pure text if user switched to a text-only model mid-thread
-                        text_parts = [
-                            p.get("text", "") for p in clean_msg["content"]
-                            if isinstance(p, dict) and p.get("type") == "text"
-                        ]
-                        clean_msg["content"] = "\n".join(text_parts) if text_parts else (msg.get("display_text") or "")
 
+                        if msg.get("attachments"):
+                            if not has_valid_image:
+                                for att in msg.get("attachments", []):
+                                    if att.get("type") == "image" and att.get("path") and os.path.isfile(att["path"]):
+                                        img_res = process_image(att["path"], include_base64=True)
+                                        if img_res.get("data_url"):
+                                            rehydrated_parts.append({
+                                                "type": "image_url",
+                                                "image_url": {"url": img_res["data_url"]}
+                                            })
+                            if audio_multimodal and not has_valid_audio:
+                                for att in msg.get("attachments", []):
+                                    if att.get("type") == "audio" and att.get("path") and os.path.isfile(att["path"]):
+                                        aud_res = process_audio(
+                                            att["path"],
+                                            include_base64=True,
+                                            target_provider=provider,
+                                            target_model=model
+                                        )
+                                        if aud_res.get("input_audio"):
+                                            rehydrated_parts.append({
+                                                "type": "input_audio",
+                                                "input_audio": {
+                                                    "data": aud_res["input_audio"]["data"],
+                                                    "format": aud_res["input_audio"]["format"]
+                                                }
+                                            })
+                        clean_msg["content"] = rehydrated_parts
                     clean_history.append(clean_msg)
+
+                # In voice call mode, keep payload lightweight to ensure sub-second latency
+                if is_call_mode and len(clean_history) > 8:
+                    cut_idx = len(clean_history) - 6
+                    while cut_idx > 0 and clean_history[cut_idx].get("role") in ("tool",):
+                        cut_idx -= 1
+                    clean_history = clean_history[cut_idx:]
 
                 messages = [{"role": "system", "content": system_prompt}] + clean_history
 
@@ -961,17 +1220,27 @@ class AgentCore:
                     if not AntigravityClient.is_logged_in():
                         raise RuntimeError("Sesión de Google Antigravity no iniciada. Inicia sesión en Configuración ➔ API Keys.")
                     
-                    logger.info(f"Antigravity dispatch: model={kwargs['model']}, tools={len(raw_tools)}")
+                    dispatch_kwargs = dict(kwargs)
+                    model_to_use = dispatch_kwargs.pop("model", model)
+                    temp_to_use = dispatch_kwargs.pop("temperature", 0.7)
+                    if is_call_mode:
+                        dispatch_kwargs["thinking_level"] = "MINIMAL"
+                        dispatch_kwargs["thinking_budget"] = 0
+                    
+                    logger.info(f"Antigravity dispatch: model={model_to_use}, tools={len(raw_tools)}, is_call_mode={is_call_mode}")
                     gen = AntigravityClient.completion(
-                        model=kwargs["model"],
+                        model=model_to_use,
                         messages=messages,
                         tools=tools,
                         stream=True,
-                        temperature=kwargs.get("temperature", 0.7)
+                        temperature=temp_to_use,
+                        **dispatch_kwargs
                     )
                     response_stream = _stream_sync_generator(gen)
                 else:
                     kwargs["messages"] = messages
+                    if is_call_mode:
+                        kwargs["max_tokens"] = min(kwargs.get("max_tokens", 4096), 350)
                     if tools:
                         kwargs["tools"] = tools
                         kwargs["tool_choice"] = "auto"
@@ -1062,6 +1331,7 @@ class AgentCore:
 
                     # Execute each tool call via MCP Manager
                     pending_visual_injections: List[Dict[str, Any]] = []
+                    pending_audio_injections: List[Dict[str, Any]] = []
                     for tc in tool_calls_list:
                         call_id = tc["id"]
                         tool_name = tc["function"]["name"]
@@ -1088,8 +1358,8 @@ class AgentCore:
                             tool_result_str = await self.mcp_manager.call_tool(tool_name, parsed_args)
                             callbacks.on_tool_end(tool_name, tool_result_str)
 
-                            # If a multimodal model requested media__read_image, inject visual payload for next turn
-                            if multimodal and tool_name in (
+                            # If a model requested media__read_image, inject visual payload for next turn
+                            if tool_name in (
                                 "media__read_image",
                                 "read_image",
                                 "pequeno-core__media__read_image",
@@ -1107,6 +1377,31 @@ class AgentCore:
                                             "width": img_res.get("width", 0),
                                             "height": img_res.get("height", 0),
                                             "size_human": img_res.get("size_human", "")
+                                        })
+
+                            # If an audio-multimodal model requested media__read_audio, inject audio payload for next turn
+                            if audio_multimodal and tool_name in (
+                                "media__read_audio",
+                                "read_audio",
+                                "pequeno-core__media__read_audio",
+                            ):
+                                req_path = parsed_args.get("path", "") if isinstance(parsed_args, dict) else ""
+                                resolved_aud = str(resolve_local_path(req_path)) if req_path else ""
+                                if resolved_aud and os.path.isfile(resolved_aud) and is_audio_file(resolved_aud):
+                                    aud_res = process_audio(
+                                        resolved_aud,
+                                        include_base64=True,
+                                        target_provider=provider,
+                                        target_model=model
+                                    )
+                                    if aud_res.get("input_audio"):
+                                        pending_audio_injections.append({
+                                            "path": resolved_aud,
+                                            "name": aud_res.get("name", os.path.basename(resolved_aud)),
+                                            "input_audio": aud_res["input_audio"],
+                                            "format": aud_res.get("format", ""),
+                                            "duration_human": aud_res.get("duration_human", ""),
+                                            "size_human": aud_res.get("size_human", "")
                                         })
 
                         # Append tool response
@@ -1158,6 +1453,40 @@ class AgentCore:
                             "_auto_injected_media": True
                         })
 
+                    if pending_audio_injections:
+                        audio_parts: List[Dict[str, Any]] = [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "Audio(s) cargados multimodalmente mediante `media__read_audio` para escucha directa: "
+                                    + ", ".join(f"{a['name']} ({a['path']})" for a in pending_audio_injections)
+                                )
+                            }
+                        ]
+                        audio_metas: List[Dict[str, Any]] = []
+                        for a in pending_audio_injections:
+                            audio_parts.append({
+                                "type": "input_audio",
+                                "input_audio": {
+                                    "data": a["input_audio"]["data"],
+                                    "format": a["input_audio"]["format"]
+                                }
+                            })
+                            audio_metas.append({
+                                "path": a["path"],
+                                "name": a["name"],
+                                "type": "audio",
+                                "format": a["format"],
+                                "duration_human": a["duration_human"],
+                                "size_human": a["size_human"]
+                            })
+                        session.history.append({
+                            "role": "user",
+                            "content": audio_parts,
+                            "attachments": audio_metas,
+                            "_auto_injected_media": True
+                        })
+
                     if self.thread_manager:
                         self.thread_manager.save_thread(target_thread_id, session.history)
 
@@ -1191,11 +1520,21 @@ class AgentCore:
                             tools_used=turn_tools_used,
                             thread_id=target_thread_id
                         )
+
+                    # Trigger auto title generation in background if thread not yet titled by LLM
+                    if self.thread_manager and not is_call_mode:
+                        th = self.thread_manager.get_thread(target_thread_id)
+                        if th and not th.get("title_custom") and not th.get("title_auto_generated"):
+                            session.title_task = asyncio.create_task(self._auto_generate_title_safe(target_thread_id, callbacks))
                     break
 
             if not final_text and not session.abort_requested:
                 final_text = current_text if current_text else "Operación completada."
                 callbacks.on_complete(final_text)
+                if self.thread_manager and not is_call_mode:
+                    th = self.thread_manager.get_thread(target_thread_id)
+                    if th and not th.get("title_custom") and not th.get("title_auto_generated"):
+                        session.title_task = asyncio.create_task(self._auto_generate_title_safe(target_thread_id, callbacks))
 
         except Exception as e:
             logger.error(f"Error during agent turn in session {target_thread_id}: {e}", exc_info=True)
@@ -1203,6 +1542,160 @@ class AgentCore:
         finally:
             if self.thread_manager:
                 self.thread_manager.save_thread(target_thread_id, session.history)
+
+    async def _auto_generate_title_safe(
+        self,
+        thread_id: str,
+        callbacks: Optional[AgentCallbacks] = None
+    ):
+        """Helper to run automatic title generation safely in background without raising."""
+        try:
+            await self.generate_thread_title(thread_id, force=False, callbacks=callbacks)
+        except Exception as e:
+            logger.debug(f"Background title generation error for {thread_id}: {e}")
+
+    async def generate_thread_title(
+        self,
+        thread_id: str,
+        force: bool = False,
+        callbacks: Optional[AgentCallbacks] = None
+    ) -> Optional[str]:
+        """
+        Generates a concise, high-quality conversation title using the active LLM
+        based on the initial user and assistant exchange.
+        """
+        if not self.thread_manager:
+            return None
+
+        th = self.thread_manager.get_thread(thread_id)
+        if not th:
+            return None
+
+        # If user explicitly customized the title and force is not set, respect user's title
+        if not force and th.get("title_custom"):
+            return th.get("title")
+
+        # If already auto-generated by LLM and force is not set, avoid duplicate generation
+        if not force and th.get("title_auto_generated"):
+            return th.get("title")
+
+        # Get messages from in-memory session or disk
+        session = self.sessions.get(thread_id)
+        messages = list(session.history) if session and session.history else list(th.get("messages", []))
+        if not messages:
+            return None
+
+        # Extract initial exchange
+        first_user = ""
+        first_asst = ""
+        for m in messages:
+            role = m.get("role")
+            if role == "user" and not first_user and not m.get("_auto_injected_media"):
+                txt = m.get("display_text") or m.get("content")
+                if isinstance(txt, list):
+                    txt = " ".join(
+                        str(p.get("text", "")) for p in txt
+                        if isinstance(p, dict) and p.get("type") == "text"
+                    )
+                first_user = str(txt or "").strip()
+            elif role == "assistant" and not first_asst:
+                txt = m.get("content")
+                if isinstance(txt, list):
+                    txt = " ".join(
+                        str(p.get("text", "")) for p in txt
+                        if isinstance(p, dict) and p.get("type") == "text"
+                    )
+                first_asst = str(txt or "").strip()
+            if first_user and first_asst:
+                break
+
+        if not first_user:
+            return None
+
+        user_snippet = first_user[:350].strip()
+        asst_snippet = first_asst[:350].strip() if first_asst else ""
+
+        system_instruction = (
+            "Eres un asistente que resume hilos de conversación. "
+            "Tu tarea es generar un título muy corto, específico y conciso (entre 3 y 5 palabras) "
+            "que resuma el tema central de la conversación.\n"
+            "Reglas estrictas:\n"
+            "1. Responde ÚNICAMENTE con el título en texto plano, sin comillas ni punto final.\n"
+            "2. En el mismo idioma de la conversación (habitualmente español).\n"
+            "3. NO agregues prefijos como 'Título:', 'Title:', 'Resumen:' ni viñetas.\n"
+            "4. Sé directo, informativo y profesional."
+        )
+
+        user_prompt = f"Conversación:\nUsuario: {user_snippet}"
+        if asst_snippet:
+            user_prompt += f"\nAsistente: {asst_snippet}"
+        user_prompt += "\n\nTítulo conciso:"
+
+        llm_messages = [
+            {"role": "system", "content": system_instruction},
+            {"role": "user", "content": user_prompt}
+        ]
+
+        self.config_manager.apply_env_keys()
+        model = self.config_manager.get_active_model()
+        call_type, kwargs = prepare_provider_call(model, self.config_manager)
+
+        generated_raw = ""
+        try:
+            if call_type == "antigravity":
+                if not AntigravityClient.is_logged_in():
+                    logger.debug("Antigravity not logged in, skipping automatic title generation")
+                    return None
+                gen = AntigravityClient.completion(
+                    model=kwargs["model"],
+                    messages=llm_messages,
+                    tools=None,
+                    stream=True,
+                    temperature=0.3,
+                    thinking_level="MINIMAL",
+                    thinking_budget=0
+                )
+                chunks_text: List[str] = []
+                thought_filter = StreamThoughtFilter(
+                    on_token=lambda tok: chunks_text.append(tok),
+                    on_thinking=lambda _th: None
+                )
+                async for chunk in _stream_sync_generator(gen):
+                    delta = chunk.choices[0].delta if chunk.choices else None
+                    if delta and delta.content:
+                        thought_filter.process_chunk(delta.content)
+                thought_filter.flush()
+                generated_raw = "".join(chunks_text)
+            else:
+                kwargs["messages"] = llm_messages
+                kwargs.pop("tools", None)
+                kwargs.pop("tool_choice", None)
+                kwargs["temperature"] = 0.3
+                kwargs["max_tokens"] = 35
+                kwargs["stream"] = True
+                response_stream = await litellm.acompletion(**kwargs)
+                chunks_text: List[str] = []
+                thought_filter = StreamThoughtFilter(
+                    on_token=lambda tok: chunks_text.append(tok),
+                    on_thinking=lambda _th: None
+                )
+                async for chunk in response_stream:
+                    delta = chunk.choices[0].delta if chunk.choices else None
+                    if delta and delta.content:
+                        thought_filter.process_chunk(delta.content)
+                thought_filter.flush()
+                generated_raw = "".join(chunks_text)
+
+            clean_title = clean_llm_title(generated_raw)
+            if clean_title and len(clean_title) >= 3:
+                self.thread_manager.update_title(thread_id, clean_title, is_auto=True)
+                self._notify_title_updated(thread_id, clean_title, callbacks)
+                logger.info(f"Auto-generated title for thread {thread_id}: '{clean_title}'")
+                return clean_title
+        except Exception as e:
+            logger.warning(f"Could not auto-generate title for thread {thread_id}: {e}")
+
+        return None
 
     async def run_headless_turn(
         self,

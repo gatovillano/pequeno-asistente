@@ -25,11 +25,15 @@ from pequeno_asistente.mcp_client.default_server import (
 from pequeno_asistente.mcp_client.manager import MCPManager
 from pequeno_asistente.agent.media_processor import (
     is_model_multimodal,
+    is_model_audio_multimodal,
+    is_audio_file,
     extract_file_paths_from_text,
     process_image,
+    process_audio,
     process_document,
     inspect_file,
 )
+from pequeno_asistente.agent.antigravity_client import AntigravityClient
 from pequeno_asistente.agent.memory import MemoryManager
 from pequeno_asistente.agent.thread_manager import ThreadManager
 from pequeno_asistente.agent.core import AgentCore, AgentCallbacks
@@ -85,6 +89,22 @@ def _create_sample_xlsx(path: str):
         zf.writestr("xl/worksheets/sheet1.xml", sheet_xml)
 
 
+def _create_sample_wav(path: str, duration_sec: float = 0.25, sample_rate: int = 16000):
+    """Creates a valid minimal 16-bit mono PCM WAV audio file."""
+    import wave
+    import math
+    num_frames = int(duration_sec * sample_rate)
+    frames = bytearray()
+    for i in range(num_frames):
+        val = int(12000 * math.sin(2.0 * math.pi * 440.0 * (i / sample_rate)))
+        frames.extend(struct.pack("<h", val))
+    with wave.open(path, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(bytes(frames))
+
+
 class TestMediaAndDefaultMCP(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.tmp_dir = tempfile.TemporaryDirectory()
@@ -109,6 +129,7 @@ class TestMediaAndDefaultMCP(unittest.IsolatedAsyncioTestCase):
         expected_tools = {
             "media__read_document",
             "media__read_image",
+            "media__read_audio",
             "media__inspect_file",
             "memory__search_episodes",
             "memory__save_episode",
@@ -186,6 +207,29 @@ class TestMediaAndDefaultMCP(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(res_insp["is_image"])
         self.assertEqual(res_insp["width"], 64)
 
+        # 7. WAV audio via media__read_audio & process_audio
+        wav_path = os.path.join(self.base_path, "saludo.wav")
+        _create_sample_wav(wav_path, duration_sec=0.5, sample_rate=16000)
+        self.assertTrue(is_audio_file(wav_path))
+
+        res_aud = json.loads(await mcp.call_tool("media__read_audio", {"path": wav_path}))
+        self.assertEqual(res_aud["status"], "ok")
+        self.assertEqual(res_aud["format"], "WAV")
+        self.assertEqual(res_aud["sample_rate"], 16000)
+        self.assertEqual(res_aud["channels"], 1)
+        self.assertTrue(res_aud["multimodal_ready"])
+
+        raw_aud = process_audio(wav_path, include_base64=True, target_provider="antigravity", target_model="antigravity/gemini-3-flash")
+        self.assertEqual(raw_aud["status"], "ok")
+        self.assertIn("input_audio", raw_aud)
+        self.assertEqual(raw_aud["input_audio"]["format"], "wav")
+        self.assertTrue(len(raw_aud["input_audio"]["data"]) > 20)
+
+        res_aud_insp = json.loads(await mcp.call_tool("media__inspect_file", {"path": wav_path}))
+        self.assertTrue(res_aud_insp["exists"])
+        self.assertTrue(res_aud_insp["is_audio"])
+        self.assertEqual(res_aud_insp["category"], "audio")
+
     def test_multimodal_model_detection_and_path_extraction(self):
         """Tests multimodal model classification and path extraction from user prompts."""
         self.assertTrue(is_model_multimodal("antigravity/gemini-3-flash", "antigravity"))
@@ -197,13 +241,26 @@ class TestMediaAndDefaultMCP(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(is_model_multimodal("openrouter/deepseek/deepseek-r1", "openrouter"))
         self.assertFalse(is_model_multimodal("openrouter/meta-llama/llama-3.3-70b-instruct", "openrouter"))
 
+        # Audio multimodal model detection
+        self.assertTrue(is_model_audio_multimodal("antigravity/gemini-3-flash", "antigravity"))
+        self.assertTrue(is_model_audio_multimodal("gemini/gemini-2.5-pro", "gemini"))
+        self.assertTrue(is_model_audio_multimodal("openai/gpt-4o-audio-preview", "openai"))
+        self.assertTrue(is_model_audio_multimodal("openrouter/google/gemini-2.5-flash", "openrouter"))
+        self.assertFalse(is_model_audio_multimodal("openrouter/deepseek/deepseek-r1", "openrouter"))
+        self.assertFalse(is_model_audio_multimodal("anthropic/claude-3-7-sonnet-latest", "anthropic"))
+
         png_path = os.path.join(self.base_path, "captura.png")
         _create_sample_png(png_path, 16, 16)
         detected = extract_file_paths_from_text(f"Por favor revisa esta imagen {png_path} y dime qué ves")
         self.assertIn(os.path.realpath(png_path), detected)
 
+        wav_path = os.path.join(self.base_path, "nota_voz.wav")
+        _create_sample_wav(wav_path)
+        detected_aud = extract_file_paths_from_text(f"Escucha este archivo {wav_path} por favor")
+        self.assertIn(os.path.realpath(wav_path), detected_aud)
+
     async def test_agent_core_automatic_multimodal_and_document_processing(self):
-        """Verifies AgentCore automatically injects image_url parts for multimodal models and extracts documents."""
+        """Verifies AgentCore automatically injects image_url and input_audio parts for multimodal models and extracts documents."""
         cfg = ConfigManager()
         cfg.data["llm"]["provider"] = "antigravity"
         cfg.data["llm"]["active_model"] = "antigravity/gemini-3-flash"
@@ -219,6 +276,9 @@ class TestMediaAndDefaultMCP(unittest.IsolatedAsyncioTestCase):
         png_path = os.path.join(self.base_path, "diagrama.png")
         _create_sample_png(png_path, width=40, height=30)
 
+        wav_path = os.path.join(self.base_path, "grabacion.wav")
+        _create_sample_wav(wav_path, duration_sec=0.3)
+
         doc_path = os.path.join(self.base_path, "especificacion.txt")
         with open(doc_path, "w", encoding="utf-8") as f:
             f.write("Código secreto del documento: ZETA-9988.")
@@ -228,7 +288,7 @@ class TestMediaAndDefaultMCP(unittest.IsolatedAsyncioTestCase):
         def fake_completion(model, messages, tools=None, stream=True, temperature=0.7, **kwargs):
             captured_messages.extend(messages)
             chunk = SimpleNamespace(
-                choices=[SimpleNamespace(delta=SimpleNamespace(content="He visto el diagrama y leído ZETA-9988.", tool_calls=None))]
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="He visto el diagrama, escuchado el audio y leído ZETA-9988.", tool_calls=None))]
             )
             yield chunk
 
@@ -240,7 +300,7 @@ class TestMediaAndDefaultMCP(unittest.IsolatedAsyncioTestCase):
             await agent.run_turn(
                 user_message="Analiza estos archivos",
                 callbacks=callbacks,
-                attachments=[png_path, doc_path]
+                attachments=[png_path, wav_path, doc_path]
             )
 
         self.assertEqual(len(completed_texts), 1)
@@ -248,14 +308,79 @@ class TestMediaAndDefaultMCP(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(user_msgs), 1)
         content = user_msgs[0]["content"]
 
-        # Because gemini-3-flash is multimodal, content must be a list containing text + image_url
+        # Because gemini-3-flash is vision & audio multimodal, content must be a list containing text + image_url + input_audio
         self.assertIsInstance(content, list)
         text_parts = [p for p in content if p.get("type") == "text"]
         img_parts = [p for p in content if p.get("type") == "image_url"]
+        aud_parts = [p for p in content if p.get("type") == "input_audio"]
         self.assertEqual(len(text_parts), 1)
         self.assertEqual(len(img_parts), 1)
+        self.assertEqual(len(aud_parts), 1)
         self.assertIn("ZETA-9988", text_parts[0]["text"])
         self.assertTrue(img_parts[0]["image_url"]["url"].startswith("data:image/png;base64,"))
+        self.assertEqual(aud_parts[0]["input_audio"]["format"], "wav")
+        self.assertTrue(len(aud_parts[0]["input_audio"]["data"]) > 20)
+
+        # Verify AntigravityClient.map_messages converts both image_url and input_audio into inlineData
+        gemini_contents, _ = AntigravityClient.map_messages(captured_messages)
+        user_gemini_parts = gemini_contents[0]["parts"]
+        inline_mimes = [p["inlineData"]["mimeType"] for p in user_gemini_parts if "inlineData" in p]
+        self.assertIn("image/png", inline_mimes)
+        self.assertIn("audio/wav", inline_mimes)
+
+        # Verify thread persistence strips base64 audio to [persisted_attachment] on disk
+        active_tid = agent.active_thread_id
+        disk_thread = th_mgr.get_thread(active_tid)
+        disk_user_msgs = [m for m in disk_thread["messages"] if m.get("role") == "user"]
+        self.assertEqual(len(disk_user_msgs), 1)
+        disk_aud_parts = [p for p in disk_user_msgs[0]["content"] if p.get("type") == "input_audio"]
+        self.assertEqual(disk_aud_parts[0]["input_audio"]["data"], "[persisted_attachment]")
+
+        # Verify subsequent turn rehydrates audio from disk attachment path
+        captured_messages.clear()
+        agent.load_thread(active_tid)
+        with patch("pequeno_asistente.agent.core.AntigravityClient.is_logged_in", return_value=True), \
+             patch("pequeno_asistente.agent.core.AntigravityClient.completion", side_effect=fake_completion):
+            await agent.run_turn(
+                user_message="¿Qué más escuchaste en el audio anterior?",
+                callbacks=callbacks,
+                thread_id=active_tid
+            )
+
+        rehydrated_user_msgs = [m for m in captured_messages if m.get("role") == "user"]
+        first_turn_aud = [p for p in rehydrated_user_msgs[0]["content"] if p.get("type") == "input_audio"]
+        self.assertEqual(len(first_turn_aud), 1)
+        self.assertNotEqual(first_turn_aud[0]["input_audio"]["data"], "[persisted_attachment]")
+        self.assertTrue(len(first_turn_aud[0]["input_audio"]["data"]) > 20)
+
+    async def test_images_always_sent_as_multimodal_vision(self):
+        """Verifies attached images are ALWAYS encoded to image_url even for custom or unlisted models."""
+        cfg = ConfigManager()
+        cfg.data["llm"]["provider"] = "openrouter"
+        cfg.data["llm"]["active_model"] = "openrouter/custom-multimodal-model-v1"
+        cfg.data["memory"]["auto_log"] = False
+
+        mem = MemoryManager(base_dir=self.base_path)
+        th_mgr = ThreadManager(base_dir=self.base_path)
+        mcp = MCPManager()
+        agent = AgentCore(cfg, mcp, mem, th_mgr)
+
+        png_path = os.path.join(self.base_path, "foto.png")
+        _create_sample_png(png_path, width=20, height=20)
+
+        payload, metas = agent._prepare_multimodal_user_turn(
+            user_message="Mira esta imagen",
+            attachments=[png_path],
+            model="openrouter/custom-multimodal-model-v1",
+            provider="openrouter"
+        )
+
+        self.assertIsInstance(payload, list)
+        img_parts = [p for p in payload if p.get("type") == "image_url"]
+        self.assertEqual(len(img_parts), 1)
+        self.assertTrue(img_parts[0]["image_url"]["url"].startswith("data:image/png;base64,"))
+        self.assertEqual(len(metas), 1)
+        self.assertEqual(metas[0]["type"], "image")
 
 
 if __name__ == "__main__":

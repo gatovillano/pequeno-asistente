@@ -232,6 +232,60 @@ class ElevenLabsBackend:
             return None
 
 
+class SystemTTSBackend:
+    """Linux system text-to-speech engine using speech-dispatcher / spd-say."""
+
+    def __init__(self, lang: str = "es", enabled: bool = True):
+        self.lang = lang
+        self.enabled = enabled
+        self._proc: Optional[subprocess.Popen] = None
+        self._lock = threading.Lock()
+
+    def is_available(self) -> bool:
+        return bool(shutil.which("spd-say"))
+
+    def speak(self, text: str, cancel_flag_checker: Optional[Callable[[], bool]] = None) -> bool:
+        if not self.is_available() or not text.strip():
+            return False
+        clean_text = clean_markdown_for_speech(text)
+        if not clean_text:
+            return False
+
+        cmd = ["spd-say", "-l", self.lang, "-w", clean_text]
+        try:
+            with self._lock:
+                self._proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            while self._proc and self._proc.poll() is None:
+                if cancel_flag_checker and cancel_flag_checker():
+                    self.cancel()
+                    break
+                time.sleep(0.04)
+
+            with self._lock:
+                self._proc = None
+            return True
+        except Exception as e:
+            logger.error(f"Error in SystemTTS (spd-say): {e}")
+            with self._lock:
+                self._proc = None
+            return False
+
+    def cancel(self):
+        with self._lock:
+            if self._proc:
+                try:
+                    self._proc.terminate()
+                except Exception:
+                    pass
+                self._proc = None
+        if shutil.which("spd-say"):
+            try:
+                subprocess.run(["spd-say", "-C"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=0.8)
+            except Exception:
+                pass
+
+
 class UnifiedTTS:
     """
     Unified Text-To-Speech engine supporting Kokoro TTS and ElevenLabs.
@@ -292,6 +346,11 @@ class UnifiedTTS:
             enabled=enabled
         )
 
+        self.system_tts = SystemTTSBackend(
+            lang=kokoro_lang,
+            enabled=enabled
+        )
+
         self._is_speaking = False
         self._cancel_flag = False
         self._current_proc: Optional[subprocess.Popen] = None
@@ -336,14 +395,16 @@ class UnifiedTTS:
 
     def is_available(self, timeout: float = 1.2) -> bool:
         """Checks availability of current active provider."""
+        if self.provider == "system":
+            return self.system_tts.is_available()
         if self.provider == "elevenlabs":
             if self.elevenlabs.is_available(timeout=timeout):
                 return True
-            # If ElevenLabs is unavailable but fallback is active, check Kokoro
+            # If ElevenLabs is unavailable but fallback is active, check Kokoro or system
             if self.fallback_to_kokoro:
-                return self.kokoro.is_available(timeout=timeout)
+                return self.kokoro.is_available(timeout=timeout) or self.system_tts.is_available()
             return False
-        return self.kokoro.is_available(timeout=timeout)
+        return self.kokoro.is_available(timeout=timeout) or self.system_tts.is_available()
 
     def get_voices(self, timeout: float = 2.0) -> List[str]:
         return self.kokoro.get_voices(timeout=timeout)
@@ -441,6 +502,7 @@ class UnifiedTTS:
                         pass
                 self._current_proc = None
             self._is_speaking = False
+        self.system_tts.cancel()
 
     def speak_async(
         self,
@@ -489,6 +551,9 @@ class UnifiedTTS:
 
                     audio_bytes = self.synthesize(sent)
                     if not audio_bytes or self._cancel_flag:
+                        if not self._cancel_flag and self.system_tts.is_available():
+                            logger.info(f"Fallback to system speech synthesizer (spd-say) for sentence: '{sent[:35]}...'")
+                            self.system_tts.speak(sent, cancel_flag_checker=lambda: self._cancel_flag)
                         continue
 
                     # Auto-detect audio format extension (.mp3 or .wav)

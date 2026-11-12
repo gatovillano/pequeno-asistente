@@ -1,9 +1,10 @@
 """
-Media, Document & Image Processor for Pequeño Asistente.
+Media, Document, Image & Audio Processor for Pequeño Asistente.
 Provides native capabilities to:
-- Detect if the active LLM model is multimodal (supports vision / image inputs).
-- Automatically detect file/image/document paths in user messages.
+- Detect if the active LLM model is multimodal (supports vision / image inputs and native audio inputs).
+- Automatically detect file/image/audio/document paths in user messages.
 - Read, resize, inspect, and Base64-encode images (PNG, JPEG, WEBP, GIF, BMP, SVG, TIFF) for multimodal models.
+- Read, inspect, and Base64-encode audio files (WAV, MP3, OGG, OPUS, FLAC, M4A, AAC, WEBM, AIFF) for direct multimodal audio processing by LLMs.
 - Read and extract structured text, tables, and metadata from documents (PDF, DOCX, ODT, XLSX, CSV, PPTX, EPUB, HTML, Markdown, JSON, source code, etc.).
 """
 import os
@@ -11,6 +12,7 @@ import re
 import csv
 import io
 import json
+import wave
 import base64
 import shutil
 import struct
@@ -27,6 +29,11 @@ logger = logging.getLogger("pequeno_asistente.media")
 
 IMAGE_EXTENSIONS = {
     ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".svg", ".tiff", ".tif", ".ico", ".avif"
+}
+
+AUDIO_EXTENSIONS = {
+    ".wav", ".mp3", ".ogg", ".oga", ".opus", ".flac", ".m4a", ".aac",
+    ".webm", ".wma", ".aiff", ".aif", ".amr", ".3gp", ".mpga", ".mpeg"
 }
 
 DOCUMENT_EXTENSIONS = {
@@ -82,11 +89,24 @@ def is_image_file(path: str | Path) -> bool:
         return False
 
 
+def is_audio_file(path: str | Path) -> bool:
+    """Checks if the path has a supported audio extension or audio MIME type."""
+    try:
+        p = resolve_local_path(str(path)) if isinstance(path, str) else path
+        ext = p.suffix.lower()
+        if ext in AUDIO_EXTENSIONS:
+            return True
+        mime, _ = mimetypes.guess_type(str(p))
+        return bool(mime and mime.startswith("audio/"))
+    except Exception:
+        return False
+
+
 def is_document_file(path: str | Path) -> bool:
     """Checks if the path is a supported document or text/code file."""
     try:
         p = resolve_local_path(str(path)) if isinstance(path, str) else path
-        if is_image_file(p):
+        if is_image_file(p) or is_audio_file(p):
             return False
         ext = p.suffix.lower()
         if ext in DOCUMENT_EXTENSIONS:
@@ -135,17 +155,22 @@ def is_model_multimodal(model_name: str, provider: Optional[str] = None) -> bool
 
     # 2. Multimodal model families across OpenAI, Anthropic, OpenRouter, KiloCode, OpenCode, Ollama
     vision_families = (
-        "gemini-", "gemini/",
+        "gemini-", "gemini/", "gemini",
         "gpt-4o", "gpt-4.1", "gpt-4.5", "gpt-4-turbo", "gpt-4-vision", "gpt-5", "chatgpt-4o",
         "claude-3", "claude-3.5", "claude-3-5", "claude-3.7", "claude-3-7",
         "claude-4", "claude-sonnet-4", "claude-opus-4", "claude-haiku-4",
-        "pixtral", "llava", "bakllava", "moondream", "minicpm-v",
-        "qwen-vl", "qwen2-vl", "qwen2.5-vl", "qwen2.5vl",
+        "pixtral", "llava", "bakllava", "moondream", "minicpm-v", "minicpmv",
+        "qwen-vl", "qwen2-vl", "qwen2.5-vl", "qwen2.5vl", "qwenvl",
         "llama-3.2-11b-vision", "llama-3.2-90b-vision", "llama3.2-vision", "llama-4",
         "gemma-3", "gemma3", "internvl", "molmo", "yi-vision", "glm-4v",
-        "granite3.2-vision", "kilo/auto"
+        "granite3.2-vision", "kilo/auto", "phi-3-vision", "phi-3.5-vision", "phi-4",
+        "deepseek-vl", "deepseek-vl2", "mistral-small-2409", "ministral"
     )
     if any(vf in m_lower for vf in vision_families):
+        return True
+
+    # Generic vision/multimodal keywords in model identifier
+    if any(vk in m_lower for vk in ("-vl", "_vl", "/vl", "vision", "visual", "multimodal", "omni")):
         return True
 
     # 3. OpenAI o1 / o3 / o4 full models support vision
@@ -158,8 +183,71 @@ def is_model_multimodal(model_name: str, provider: Optional[str] = None) -> bool
         import litellm
         if litellm.supports_vision(model=model_name):
             return True
+        stripped_name = m_lower.split("/", 1)[1] if m_lower.startswith(("vercel/", "openrouter/", "kilocode/", "opencode/")) else m_lower
+        if litellm.supports_vision(model=stripped_name):
+            return True
         if "/" in model_name and litellm.supports_vision(model=pure_name):
             return True
+    except Exception:
+        pass
+
+    return False
+
+
+def is_model_audio_multimodal(model_name: str, provider: Optional[str] = None) -> bool:
+    """
+    Determines whether the specified LLM model supports native multimodal audio input directly
+    (i.e. listening to raw audio via `inlineData` or `input_audio` content blocks).
+    """
+    if not model_name:
+        return False
+
+    m_lower = model_name.lower().strip()
+    prov_lower = (provider or "").lower().strip()
+
+    if "/" in m_lower and not prov_lower:
+        prov_lower = m_lower.split("/", 1)[0]
+
+    # Known text-only or vision-only models that do not accept native audio input
+    non_audio_keywords = (
+        "llama-3.3-70b", "llama-3.1-", "llama3.1", "llama3.3", "llama-3.2-",
+        "deepseek-chat", "deepseek-r1", "deepseek-coder", "deepseek-v3",
+        "qwen2.5-coder", "qwen-2.5-coder", "codestral",
+        "o1-mini", "o3-mini", "gpt-3.5", "mistral-7b", "mixtral-8x",
+        "claude-3", "claude-3.5", "claude-3-5", "claude-3.7", "claude-3-7",
+        "claude-4", "claude-sonnet-4", "claude-opus-4", "claude-haiku-4",
+        "pixtral", "llava", "bakllava", "moondream"
+    )
+    if any(k in m_lower for k in non_audio_keywords):
+        return False
+
+    # 1. Google Gemini models (1.5, 2.0, 2.5, 3.x, 4.x, Pro, Flash) across Antigravity, Google, OpenRouter, OpenCode, etc.
+    if "gemini" in m_lower or "gemma-3n" in m_lower or "gemma3n" in m_lower:
+        return True
+
+    if prov_lower in ("antigravity", "google", "gemini") or m_lower.startswith(("antigravity/", "gemini/")):
+        return True
+
+    # 2. Native audio & omni model families across OpenAI, Qwen, Mistral, OpenRouter, KiloCode
+    audio_families = (
+        "gpt-4o-audio", "gpt-4o-mini-audio", "gpt-4o-realtime", "gpt-audio",
+        "gpt-4o", "gpt-4.1", "gpt-4.5", "gpt-5", "chatgpt-4o",
+        "qwen-audio", "qwen2-audio", "qwen2.5-omni", "qwen-omni",
+        "voxtral", "ultravox", "step-audio", "glm-4-voice", "minicpm-o",
+        "kilo/auto"
+    )
+    if any(af in m_lower for af in audio_families):
+        return True
+
+    # 3. Fallback to litellm.supports_audio_input
+    pure_name = m_lower.split("/")[-1]
+    try:
+        import litellm
+        if hasattr(litellm, "supports_audio_input"):
+            if litellm.supports_audio_input(model=model_name):
+                return True
+            if "/" in model_name and litellm.supports_audio_input(model=pure_name):
+                return True
     except Exception:
         pass
 
@@ -169,7 +257,7 @@ def is_model_multimodal(model_name: str, provider: Optional[str] = None) -> bool
 def extract_file_paths_from_text(text: str) -> List[str]:
     """
     Scans a user message for local file paths (file://..., /..., ~/...) that exist on disk
-    and correspond to supported images or documents.
+    and correspond to supported images, audio files, or documents.
     """
     if not text or not text.strip():
         return []
@@ -196,7 +284,9 @@ def extract_file_paths_from_text(text: str) -> List[str]:
                 resolved = resolve_local_path(candidate)
                 if resolved.exists() and resolved.is_file():
                     s_path = str(resolved)
-                    if s_path not in seen and (is_image_file(resolved) or is_document_file(resolved)):
+                    if s_path not in seen and (
+                        is_image_file(resolved) or is_audio_file(resolved) or is_document_file(resolved)
+                    ):
                         seen.add(s_path)
                         found_paths.append(s_path)
             except Exception:
@@ -403,6 +493,302 @@ def _extract_image_ocr(image_path: Path) -> str:
         except Exception:
             pass
     return ""
+
+
+def format_duration(seconds: float) -> str:
+    """Formats duration in seconds into a human-readable string (e.g., '01:24' or '4.2s')."""
+    if not seconds or seconds <= 0:
+        return ""
+    if seconds < 10.0:
+        return f"{seconds:.1f}s"
+    total_sec = int(round(seconds))
+    hrs = total_sec // 3600
+    mins = (total_sec % 3600) // 60
+    secs = total_sec % 60
+    if hrs > 0:
+        return f"{hrs:02d}:{mins:02d}:{secs:02d}"
+    return f"{mins:02d}:{secs:02d}"
+
+
+def _parse_audio_metadata(path: Path) -> Dict[str, Any]:
+    """
+    Extracts technical audio metadata (duration, sample_rate, channels, codec/format)
+    from a local audio file using Python's `wave` module or `ffprobe` if available.
+    """
+    ext = path.suffix.lower()
+    meta: Dict[str, Any] = {
+        "duration_seconds": 0.0,
+        "duration_human": "",
+        "sample_rate": 0,
+        "channels": 0,
+    }
+
+    # 1. Native fast WAV parser via standard library `wave`
+    if ext == ".wav":
+        try:
+            with wave.open(str(path), "rb") as wf:
+                channels = wf.getnchannels()
+                sample_rate = wf.getframerate()
+                frames = wf.getnframes()
+                duration = (frames / float(sample_rate)) if sample_rate > 0 else 0.0
+                if channels > 0 and sample_rate > 0:
+                    meta["channels"] = int(channels)
+                    meta["sample_rate"] = int(sample_rate)
+                    meta["duration_seconds"] = round(duration, 2)
+                    meta["duration_human"] = format_duration(duration)
+                    return meta
+        except Exception:
+            pass
+
+    # 2. ffprobe metadata inspection for any audio format (MP3, OGG, OPUS, FLAC, M4A, AAC, WAV, etc.)
+    ffprobe_bin = shutil.which("ffprobe")
+    if ffprobe_bin:
+        try:
+            proc = subprocess.run(
+                [
+                    ffprobe_bin,
+                    "-v", "error",
+                    "-select_streams", "a:0",
+                    "-show_entries", "stream=sample_rate,channels,duration,codec_name:format=duration",
+                    "-of", "json",
+                    str(path)
+                ],
+                capture_output=True,
+                text=True,
+                timeout=8
+            )
+            if proc.returncode == 0 and proc.stdout.strip():
+                probe_data = json.loads(proc.stdout)
+                streams = probe_data.get("streams") or []
+                fmt_obj = probe_data.get("format") or {}
+                dur = 0.0
+                if streams:
+                    s0 = streams[0]
+                    if s0.get("sample_rate"):
+                        meta["sample_rate"] = int(s0["sample_rate"])
+                    if s0.get("channels"):
+                        meta["channels"] = int(s0["channels"])
+                    if s0.get("duration"):
+                        try:
+                            dur = float(s0["duration"])
+                        except Exception:
+                            pass
+                if not dur and fmt_obj.get("duration"):
+                    try:
+                        dur = float(fmt_obj["duration"])
+                    except Exception:
+                        pass
+                if dur > 0:
+                    meta["duration_seconds"] = round(dur, 2)
+                    meta["duration_human"] = format_duration(dur)
+        except Exception as e:
+            logger.debug(f"ffprobe metadata extraction fallback for {path}: {e}")
+
+    return meta
+
+
+def process_audio(
+    path: str | Path,
+    include_base64: bool = True,
+    target_provider: Optional[str] = None,
+    target_model: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Reads an audio file from disk, extracts technical metadata (duration, sample rate,
+    channels, MIME type, format), optionally normalizes uncommon formats via ffmpeg when
+    required by the target provider, and Base64-encodes the audio payload for direct
+    multimodal LLM audio comprehension (`input_audio` / `inlineData`).
+    """
+    p = resolve_local_path(str(path))
+    if not p.exists() or not p.is_file():
+        return {
+            "status": "error",
+            "error": f"El archivo de audio no existe: {p}",
+            "path": str(p)
+        }
+
+    size_bytes = p.stat().st_size
+    ext = p.suffix.lower()
+
+    mime_map = {
+        ".wav": ("audio/wav", "wav", "WAV"),
+        ".mp3": ("audio/mp3", "mp3", "MP3"),
+        ".mpga": ("audio/mpeg", "mp3", "MP3"),
+        ".mpeg": ("audio/mpeg", "mp3", "MP3"),
+        ".ogg": ("audio/ogg", "ogg", "OGG"),
+        ".oga": ("audio/ogg", "ogg", "OGG"),
+        ".opus": ("audio/ogg", "ogg", "OPUS"),
+        ".flac": ("audio/flac", "flac", "FLAC"),
+        ".m4a": ("audio/mp4", "m4a", "M4A"),
+        ".aac": ("audio/aac", "aac", "AAC"),
+        ".webm": ("audio/webm", "webm", "WEBM"),
+        ".aiff": ("audio/aiff", "aiff", "AIFF"),
+        ".aif": ("audio/aiff", "aiff", "AIFF"),
+        ".wma": ("audio/x-ms-wma", "wma", "WMA"),
+        ".amr": ("audio/amr", "amr", "AMR"),
+        ".3gp": ("audio/3gpp", "3gp", "3GP"),
+    }
+
+    if ext in mime_map:
+        mime_type, audio_fmt, fmt_label = mime_map[ext]
+    else:
+        guessed_mime, _ = mimetypes.guess_type(str(p))
+        mime_type = guessed_mime if (guessed_mime and guessed_mime.startswith("audio/")) else "audio/wav"
+        audio_fmt = ext.lstrip(".") or "wav"
+        fmt_label = audio_fmt.upper()
+
+    audio_meta = _parse_audio_metadata(p)
+    logger.info(
+        f"Procesando archivo de audio: '{p.name}' ({format_file_size(size_bytes)}, "
+        f"formato={fmt_label}, duración={audio_meta.get('duration_human') or 'N/A'}, "
+        f"sample_rate={audio_meta.get('sample_rate')}Hz, canales={audio_meta.get('channels')})"
+    )
+
+    encoded_bytes: Optional[bytes] = None
+    encoded_mime = mime_type
+    encoded_format = audio_fmt
+    was_converted = False
+
+    # Determine if provider requires strict WAV/MP3 conversion or if file is too large for inline base64 upload
+    # (e.g. > 4 MB uncompressed WAV/AIFF/FLAC mixes that would exceed HTTP inline timeouts)
+    prov_lower = (target_provider or "").lower()
+    mod_lower = (target_model or "").lower()
+    is_gemini_target = (
+        "gemini" in mod_lower
+        or prov_lower in ("antigravity", "google", "gemini")
+        or mod_lower.startswith(("antigravity/", "gemini/"))
+    )
+
+    needs_conversion = False
+    is_large_audio = size_bytes > (4 * 1024 * 1024) or (
+        ext in (".wav", ".aiff", ".aif", ".flac") and size_bytes > (2 * 1024 * 1024)
+    )
+    if is_large_audio:
+        needs_conversion = True
+    elif ext in (".wma", ".amr", ".3gp"):
+        needs_conversion = True
+    elif not is_gemini_target and audio_fmt not in ("wav", "mp3"):
+        # OpenAI / generic OpenAI-compatible `input_audio` endpoints require 'wav' or 'mp3'
+        needs_conversion = True
+
+    if needs_conversion and include_base64:
+        ffmpeg_bin = shutil.which("ffmpeg")
+        if ffmpeg_bin:
+            import time as _time
+            t0 = _time.time()
+            logger.info(
+                f"Optimizando audio '{p.name}' ({format_file_size(size_bytes)}) con ffmpeg "
+                "para transmisión multimodal ultrarrápida..."
+            )
+            try:
+                # 1. If targeting Gemini/Antigravity, Opus/OGG provides the highest fidelity at minimal size in ~1.2s
+                if is_gemini_target:
+                    proc_opus = subprocess.run(
+                        [
+                            ffmpeg_bin, "-y", "-loglevel", "error",
+                            "-i", str(p),
+                            "-vn",
+                            "-c:a", "libopus", "-b:a", "64k",
+                            "-f", "ogg", "pipe:1"
+                        ],
+                        capture_output=True,
+                        timeout=15
+                    )
+                    if proc_opus.returncode == 0 and proc_opus.stdout:
+                        encoded_bytes = proc_opus.stdout
+                        encoded_mime = "audio/ogg"
+                        encoded_format = "ogg"
+                        was_converted = True
+                        elapsed = _time.time() - t0
+                        logger.info(
+                            f"Audio optimizado en {elapsed:.2f}s: {format_file_size(size_bytes)} -> "
+                            f"{format_file_size(len(encoded_bytes))} (Opus/OGG 64k)"
+                        )
+
+                # 2. If not Gemini or Opus unavailable, use high-speed CBR MP3 128k (universal across OpenAI and Gemini)
+                if not was_converted:
+                    proc_mp3 = subprocess.run(
+                        [
+                            ffmpeg_bin, "-y", "-loglevel", "error",
+                            "-i", str(p),
+                            "-vn", "-ar", "24000", "-ac", "2",
+                            "-c:a", "libmp3lame", "-b:a", "128k",
+                            "-f", "mp3", "pipe:1"
+                        ],
+                        capture_output=True,
+                        timeout=15
+                    )
+                    if proc_mp3.returncode == 0 and proc_mp3.stdout:
+                        encoded_bytes = proc_mp3.stdout
+                        encoded_mime = "audio/mp3"
+                        encoded_format = "mp3"
+                        was_converted = True
+                        elapsed = _time.time() - t0
+                        logger.info(
+                            f"Audio optimizado en {elapsed:.2f}s: {format_file_size(size_bytes)} -> "
+                            f"{format_file_size(len(encoded_bytes))} (MP3 128k 24kHz estéreo)"
+                        )
+
+                # 3. Ultimate ultra-fast fallback: WAV 16kHz mono (takes ~0.1s in RAM)
+                if not was_converted:
+                    proc_wav = subprocess.run(
+                        [
+                            ffmpeg_bin, "-y", "-loglevel", "error",
+                            "-i", str(p),
+                            "-vn", "-ar", "16000", "-ac", "1",
+                            "-c:a", "pcm_s16le",
+                            "-f", "wav", "pipe:1"
+                        ],
+                        capture_output=True,
+                        timeout=15
+                    )
+                    if proc_wav.returncode == 0 and proc_wav.stdout:
+                        encoded_bytes = proc_wav.stdout
+                        encoded_mime = "audio/wav"
+                        encoded_format = "wav"
+                        was_converted = True
+                        elapsed = _time.time() - t0
+                        logger.info(
+                            f"Audio normalizado en {elapsed:.2f}s: {format_file_size(size_bytes)} -> "
+                            f"{format_file_size(len(encoded_bytes))} (WAV 16kHz mono)"
+                        )
+            except Exception as e:
+                logger.warning(f"ffmpeg audio optimization fallback for {p}: {e}")
+
+    if encoded_bytes is None:
+        encoded_bytes = p.read_bytes()
+
+    result: Dict[str, Any] = {
+        "status": "ok",
+        "category": "audio",
+        "path": str(p),
+        "filename": p.name,
+        "name": p.name,
+        "format": fmt_label,
+        "audio_format": encoded_format,
+        "mime_type": encoded_mime,
+        "duration_seconds": audio_meta.get("duration_seconds", 0.0),
+        "duration_human": audio_meta.get("duration_human", ""),
+        "sample_rate": audio_meta.get("sample_rate", 0),
+        "channels": audio_meta.get("channels", 0),
+        "size_bytes": size_bytes,
+        "size_human": format_file_size(size_bytes),
+        "encoded_size_bytes": len(encoded_bytes),
+        "encoded_size_human": format_file_size(len(encoded_bytes)),
+        "was_converted": was_converted
+    }
+
+    if include_base64:
+        b64_str = base64.b64encode(encoded_bytes).decode("ascii")
+        result["base64"] = b64_str
+        result["data_url"] = f"data:{encoded_mime};base64,{b64_str}"
+        result["input_audio"] = {
+            "data": b64_str,
+            "format": encoded_format,
+            "mime_type": encoded_mime
+        }
+
+    return result
 
 
 class _SimpleHTMLTextExtractor(HTMLParser):
@@ -915,14 +1301,24 @@ def inspect_file(path: str | Path) -> Dict[str, Any]:
         img_meta = process_image(p, include_base64=False, extract_ocr=False)
         img_meta["exists"] = True
         img_meta["is_image"] = True
+        img_meta["is_audio"] = False
         img_meta["is_document"] = False
         return img_meta
+
+    if is_audio_file(p):
+        aud_meta = process_audio(p, include_base64=False)
+        aud_meta["exists"] = True
+        aud_meta["is_image"] = False
+        aud_meta["is_audio"] = True
+        aud_meta["is_document"] = False
+        return aud_meta
 
     if is_document_file(p):
         info: Dict[str, Any] = {
             "status": "ok",
             "exists": True,
             "is_image": False,
+            "is_audio": False,
             "is_document": True,
             "category": "document",
             "path": str(p),
@@ -941,6 +1337,7 @@ def inspect_file(path: str | Path) -> Dict[str, Any]:
         "status": "ok",
         "exists": True,
         "is_image": False,
+        "is_audio": False,
         "is_document": False,
         "category": "other",
         "path": str(p),

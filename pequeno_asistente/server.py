@@ -162,8 +162,37 @@ class CredentialResponseRequest(BaseModel):
 pending_credential_requests: Dict[str, asyncio.Future] = {}
 
 
+class SpecializedAgentProfile(BaseModel):
+    """Agent with specialized prompt, reusable across all workspaces."""
+    name: Optional[str] = Field(None, description="Nombre visible del agente especializado")
+    description: Optional[str] = Field(None, description="Descripción corta del rol del agente")
+    system_prompt: Optional[str] = Field(None, description="Prompt de sistema/instrucciones específicas del agente")
+
+
+class WorkspaceProfile(BaseModel):
+    """Workspace/project: one or more folders plus contextual memory for the agent."""
+    name: Optional[str] = Field(None, description="Nombre del workspace/proyecto")
+    description: Optional[str] = Field(None, description="Descripción del workspace")
+    folders: Optional[List[str]] = Field(None, description="Lista de carpetas asociadas al workspace")
+    memory_file: Optional[str] = Field(None, description="Ruta al archivo de memoria contextual del workspace")
+
+
 class ThreadCreateRequest(BaseModel):
     title: Optional[str] = Field(None, description="Initial title for the new thread")
+    workspace_id: Optional[str] = Field(None, description="ID de un workspace guardado en configuración")
+    workspace_profile: Optional[WorkspaceProfile] = Field(
+        None,
+        description="Perfil inline de workspace (carpetas + memoria contextual). Si se combina con workspace_id, estos valores tienen prioridad."
+    )
+    agent_id: Optional[str] = Field(None, description="ID de un agente especializado (prompt) guardado en configuración")
+    agent_profile: Optional[SpecializedAgentProfile] = Field(
+        None,
+        description="Perfil inline del agente especializado (prompt). Si se combina con agent_id, estos valores tienen prioridad."
+    )
+
+
+class ThreadTitleUpdateRequest(BaseModel):
+    title: str = Field(..., description="Nuevo título de la conversación")
 
 
 class ModelSelectRequest(BaseModel):
@@ -302,6 +331,171 @@ async def list_skills(q: Optional[str] = None):
     return {"skills": [s.to_dict() for s in skills.values() if s.enabled]}
 
 
+# Specialized Agents Endpoints (prompt-only, reusable across workspaces)
+class AgentUpsertRequest(BaseModel):
+    id: Optional[str] = Field(None, description="Agent ID (slug). Si se omite, se genera desde el nombre.")
+    name: str = Field(..., description="Nombre visible del agente")
+    description: Optional[str] = Field("", description="Descripción corta del rol")
+    system_prompt: str = Field("", description="Prompt/instrucciones específicas del agente")
+
+
+def _slugify_id(text: str, prefix: str = "item") -> str:
+    import re, uuid
+    base = re.sub(r"[^a-zA-Z0-9_-]+", "-", (text or "").strip().lower()).strip("-")
+    return base[:40] or f"{prefix}-{uuid.uuid4().hex[:6]}"
+
+
+def _slugify_agent_id(text: str) -> str:
+    return _slugify_id(text, "agent")
+
+
+@app.get("/api/agents", dependencies=[Depends(verify_auth)], tags=["Agents"])
+async def list_agents():
+    cfg, _, _, _, _ = get_agent_stack()
+    agents = cfg.get_agents()
+    items = []
+    for aid, data in agents.items():
+        item = dict(data or {})
+        item.setdefault("id", aid)
+        item.pop("workspace_path", None)
+        items.append(item)
+    items.sort(key=lambda x: (x.get("name") or x.get("id") or "").lower())
+    return {"agents": items}
+
+
+@app.post("/api/agents", dependencies=[Depends(verify_auth)], tags=["Agents"])
+async def upsert_agent(body: AgentUpsertRequest):
+    cfg, _, _, _, _ = get_agent_stack()
+    agent_id = (body.id or "").strip() or _slugify_agent_id(body.name)
+    data = {
+        "id": agent_id,
+        "name": body.name.strip(),
+        "description": (body.description or "").strip(),
+        "system_prompt": (body.system_prompt or "").strip(),
+    }
+    cfg.save_agent(agent_id, data)
+    return {"agent": data}
+
+
+@app.get("/api/agents/{agent_id}", dependencies=[Depends(verify_auth)], tags=["Agents"])
+async def get_agent(agent_id: str):
+    cfg, _, _, _, _ = get_agent_stack()
+    agent = cfg.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    out = dict(agent)
+    out.setdefault("id", agent_id)
+    out.pop("workspace_path", None)
+    return out
+
+
+@app.delete("/api/agents/{agent_id}", dependencies=[Depends(verify_auth)], tags=["Agents"])
+async def delete_agent(agent_id: str):
+    cfg, _, _, _, _ = get_agent_stack()
+    ok = cfg.delete_agent(agent_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return {"deleted": True, "agent_id": agent_id}
+
+
+# Workspaces Endpoints (project folders + contextual memory)
+class WorkspaceUpsertRequest(BaseModel):
+    id: Optional[str] = Field(None, description="Workspace ID (slug). Si se omite, se genera desde el nombre.")
+    name: str = Field(..., description="Nombre del workspace/proyecto")
+    description: Optional[str] = Field("", description="Descripción del workspace")
+    folders: Optional[List[str]] = Field(default_factory=list, description="Carpetas asociadas al workspace")
+    memory_file: Optional[str] = Field("", description="Ruta al archivo de memoria contextual (por defecto CONTEXT.md en la primera carpeta)")
+
+
+def _prepare_workspace_profile(cfg, raw: Dict[str, Any], ws_id: Optional[str] = None) -> Dict[str, Any]:
+    from pathlib import Path as _Path
+    data = dict(raw or {})
+    if ws_id and not data.get("id"):
+        data["id"] = ws_id
+    folders_in = data.get("folders") or []
+    if not folders_in and data.get("workspace_path"):
+        folders_in = [data.get("workspace_path")]
+    folders: List[str] = []
+    for f in folders_in:
+        if not f or not str(f).strip():
+            continue
+        p = _Path(str(f)).expanduser().resolve()
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        folders.append(str(p))
+    data["folders"] = folders
+
+    mem_file = (data.get("memory_file") or "").strip()
+    if not mem_file and folders:
+        mem_file = str(_Path(folders[0]) / "CONTEXT.md")
+    if mem_file:
+        mp = _Path(mem_file).expanduser()
+        if not mp.is_absolute() and folders:
+            mp = _Path(folders[0]) / mp
+        mp = mp.resolve()
+        try:
+            mp.parent.mkdir(parents=True, exist_ok=True)
+            if not mp.exists():
+                ws_name = data.get("name") or "Workspace"
+                mp.write_text(f"# Memoria contextual del workspace: {ws_name}\n\nNotas, decisiones y contexto persistente del proyecto.\n", encoding="utf-8")
+        except Exception:
+            pass
+        mem_file = str(mp)
+    data["memory_file"] = mem_file
+    data.pop("workspace_path", None)
+    return data
+
+
+@app.get("/api/workspaces", dependencies=[Depends(verify_auth)], tags=["Workspaces"])
+async def list_workspaces():
+    cfg, _, _, _, _ = get_agent_stack()
+    workspaces = cfg.get_workspaces()
+    items = []
+    for wid, data in workspaces.items():
+        item = dict(data or {})
+        item.setdefault("id", wid)
+        items.append(item)
+    items.sort(key=lambda x: (x.get("name") or x.get("id") or "").lower())
+    return {"workspaces": items}
+
+
+@app.post("/api/workspaces", dependencies=[Depends(verify_auth)], tags=["Workspaces"])
+async def upsert_workspace(body: WorkspaceUpsertRequest):
+    cfg, _, _, _, _ = get_agent_stack()
+    workspace_id = (body.id or "").strip() or _slugify_id(body.name, "workspace")
+    data = _prepare_workspace_profile(cfg, {
+        "id": workspace_id,
+        "name": body.name.strip(),
+        "description": (body.description or "").strip(),
+        "folders": body.folders or [],
+        "memory_file": (body.memory_file or "").strip(),
+    }, workspace_id)
+    cfg.save_workspace(workspace_id, data)
+    return {"workspace": data}
+
+
+@app.get("/api/workspaces/{workspace_id}", dependencies=[Depends(verify_auth)], tags=["Workspaces"])
+async def get_workspace(workspace_id: str):
+    cfg, _, _, _, _ = get_agent_stack()
+    ws = cfg.get_workspace(workspace_id)
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    out = dict(ws)
+    out.setdefault("id", workspace_id)
+    return out
+
+
+@app.delete("/api/workspaces/{workspace_id}", dependencies=[Depends(verify_auth)], tags=["Workspaces"])
+async def delete_workspace(workspace_id: str):
+    cfg, _, _, _, _ = get_agent_stack()
+    ok = cfg.delete_workspace(workspace_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    return {"deleted": True, "workspace_id": workspace_id}
+
+
 # Thread Management Endpoints
 @app.get("/api/threads", dependencies=[Depends(verify_auth)], tags=["Threads"])
 async def list_threads():
@@ -312,9 +506,60 @@ async def list_threads():
 
 @app.post("/api/threads", dependencies=[Depends(verify_auth)], tags=["Threads"])
 async def create_thread(body: ThreadCreateRequest):
-    _, _, th_mgr, _, agent = get_agent_stack()
-    title = body.title.strip() if body.title else "Nueva conversación"
-    new_th = agent.new_thread(title=title)
+    cfg, _, th_mgr, _, agent = get_agent_stack()
+
+    # Resolve workspace (project folders + contextual memory)
+    resolved_workspace: Optional[Dict[str, Any]] = None
+    workspace_id = (body.workspace_id or "").strip() or None
+    if workspace_id:
+        saved_ws = cfg.get_workspace(workspace_id)
+        if saved_ws and isinstance(saved_ws, dict):
+            resolved_workspace = dict(saved_ws)
+            resolved_workspace.setdefault("id", workspace_id)
+    if body.workspace_profile:
+        inline_ws = body.workspace_profile.model_dump(exclude_none=True)
+        if resolved_workspace:
+            resolved_workspace.update({k: v for k, v in inline_ws.items() if v not in (None, "", [])})
+        else:
+            resolved_workspace = inline_ws
+    if resolved_workspace:
+        resolved_workspace = _prepare_workspace_profile(cfg, resolved_workspace, workspace_id)
+        if workspace_id and not resolved_workspace.get("id"):
+            resolved_workspace["id"] = workspace_id
+
+    # Resolve specialized agent profile (prompt-only, reusable across workspaces)
+    resolved_agent: Optional[Dict[str, Any]] = None
+    agent_id = (body.agent_id or "").strip() or None
+    if agent_id:
+        saved = cfg.get_agent(agent_id)
+        if saved and isinstance(saved, dict):
+            resolved_agent = dict(saved)
+            resolved_agent.setdefault("id", agent_id)
+            resolved_agent.pop("workspace_path", None)
+    if body.agent_profile:
+        inline = body.agent_profile.model_dump(exclude_none=True)
+        inline.pop("workspace_path", None)
+        if resolved_agent:
+            resolved_agent.update({k: v for k, v in inline.items() if v not in (None, "")})
+        else:
+            resolved_agent = inline
+    if resolved_agent and agent_id and not resolved_agent.get("id"):
+        resolved_agent["id"] = agent_id
+
+    default_title = "Nueva conversación"
+    if resolved_workspace and resolved_workspace.get("name"):
+        default_title = resolved_workspace.get("name")
+    elif resolved_agent and resolved_agent.get("name"):
+        default_title = resolved_agent.get("name")
+    title = body.title.strip() if body.title else default_title
+
+    new_th = agent.new_thread(
+        title=title,
+        agent_id=agent_id,
+        agent_profile=resolved_agent,
+        workspace_id=workspace_id or (resolved_workspace.get("id") if resolved_workspace else None),
+        workspace_profile=resolved_workspace
+    )
     return new_th
 
 
@@ -331,7 +576,11 @@ async def get_thread(thread_id: str):
         "created_at": thread_data.get("created_at"),
         "updated_at": thread_data.get("updated_at"),
         "messages": thread_data.get("messages", []),
-        "scratchpad": thread_data.get("scratchpad", {})
+        "scratchpad": thread_data.get("scratchpad", {}),
+        "agent_id": thread_data.get("agent_id"),
+        "agent_profile": thread_data.get("agent_profile"),
+        "workspace_id": thread_data.get("workspace_id"),
+        "workspace_profile": thread_data.get("workspace_profile"),
     }
 
 
@@ -343,6 +592,32 @@ async def delete_thread(thread_id: str):
     if not success:
         raise HTTPException(status_code=404, detail="Thread not found")
     return {"deleted": True, "thread_id": thread_id}
+
+
+@app.put("/api/threads/{thread_id}/title", dependencies=[Depends(verify_auth)], tags=["Threads"])
+@app.patch("/api/threads/{thread_id}/title", dependencies=[Depends(verify_auth)], tags=["Threads"])
+async def update_thread_title(thread_id: str, body: ThreadTitleUpdateRequest):
+    _, _, th_mgr, _, agent = get_agent_stack()
+    th = th_mgr.get_thread(thread_id)
+    if not th:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    success = th_mgr.update_title(thread_id, body.title, is_custom=True)
+    updated = th_mgr.get_thread(thread_id)
+    new_title = updated.get("title", body.title) if updated else body.title
+    agent._notify_title_updated(thread_id, new_title)
+    return {"thread_id": thread_id, "title": new_title, "success": success}
+
+
+@app.post("/api/threads/{thread_id}/auto-title", dependencies=[Depends(verify_auth)], tags=["Threads"])
+async def trigger_auto_title(thread_id: str):
+    _, _, th_mgr, _, agent = get_agent_stack()
+    th = th_mgr.get_thread(thread_id)
+    if not th:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    generated = await agent.generate_thread_title(thread_id, force=True)
+    current = th_mgr.get_thread(thread_id)
+    final_title = generated or (current.get("title") if current else "Conversación")
+    return {"thread_id": thread_id, "title": final_title, "generated": bool(generated)}
 
 
 # Chat & Streaming Endpoints
@@ -416,6 +691,13 @@ async def chat(req: ChatRequest, request: Request):
     def _on_dequeued():
         queue.put_nowait({"type": "dequeued", "thread_id": target_thread_id})
 
+    def _on_title_updated(tid: str, title: str):
+        queue.put_nowait({
+            "type": "thread_title_updated",
+            "thread_id": tid,
+            "title": title
+        })
+
     # If target session is currently busy, notify client that message is enqueued
     if agent.is_thread_running(target_thread_id):
         queue.put_nowait({
@@ -430,7 +712,8 @@ async def chat(req: ChatRequest, request: Request):
         on_tool_start=_on_tool_start,
         on_tool_end=_on_tool_end,
         on_complete=_on_complete,
-        on_error=_on_error
+        on_error=_on_error,
+        on_thread_title_updated=_on_title_updated
     )
 
     active_turn_requests: List[str] = []
@@ -494,6 +777,13 @@ async def chat(req: ChatRequest, request: Request):
             queue.put_nowait({"type": "error", "error": str(ex)})
         finally:
             CredentialManager.reset_turn_handler(token)
+            # Allow background title generation a short window to emit SSE event before closing stream
+            sess = agent.get_session(target_thread_id)
+            if sess and getattr(sess, "title_task", None) and not sess.title_task.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(sess.title_task), timeout=2.0)
+                except Exception:
+                    pass
             for r_id in list(active_turn_requests):
                 f = pending_credential_requests.pop(r_id, None)
                 if f and not f.done():
@@ -577,7 +867,7 @@ async def respond_credential(body: CredentialResponseRequest):
 async def list_models():
     cfg, _, _, _, _ = get_agent_stack()
     from pequeno_asistente.agent.model_fetcher import get_cached_models
-    from pequeno_asistente.agent.media_processor import is_model_multimodal
+    from pequeno_asistente.agent.media_processor import is_model_multimodal, is_model_audio_multimodal
     active_m = cfg.get_active_model()
     active_p = cfg.get_active_provider()
     cached = get_cached_models(active_p)
@@ -585,6 +875,7 @@ async def list_models():
         "active_model": active_m,
         "active_provider": active_p,
         "is_multimodal": is_model_multimodal(active_m, active_p),
+        "is_audio_multimodal": is_model_audio_multimodal(active_m, active_p),
         "cached_models": cached
     }
 

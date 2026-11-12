@@ -24,8 +24,10 @@ from pequeno_asistente.security.manager import CredentialManager
 from pequeno_asistente.agent.media_processor import (
     process_document,
     process_image,
+    process_audio,
     inspect_file,
-    is_model_multimodal
+    is_model_multimodal,
+    is_model_audio_multimodal
 )
 
 logger = logging.getLogger("pequeno_asistente.mcp.default_server")
@@ -588,8 +590,25 @@ MEDIA_TOOLS_DEFINITIONS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "media__read_audio",
+            "description": "[media] Solicita la lectura y escucha multimodal directa de un archivo de audio local por su ruta (WAV, MP3, OGG, OPUS, FLAC, M4A, AAC, WEBM, AIFF). Extrae sus metadatos (duración, frecuencia de muestreo, canales, codec, tamaño) y, si el modelo activo soporta entrada multimodal de audio, inyecta el audio en el turno actual para que el modelo lo escuche directamente.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Ruta local del archivo de audio (ej: '/home/usuario/Música/nota_voz.ogg' o '~/grabacion.mp3')"
+                    }
+                },
+                "required": ["path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "media__inspect_file",
-            "description": "[media] Inspecciona un archivo o directorio local por su ruta devolviendo sus metadatos detallados (existencia, categoría imagen/documento/otro, tipo MIME, tamaño en bytes, dimensiones si es imagen o número de páginas si es PDF).",
+            "description": "[media] Inspecciona un archivo o directorio local por su ruta devolviendo sus metadatos detallados (existencia, categoría imagen/audio/documento/otro, tipo MIME, tamaño en bytes, dimensiones si es imagen, duración si es audio o número de páginas si es PDF).",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1020,6 +1039,36 @@ async def execute_default_mcp_tool(
                         res["vision_note"] = (
                             f"El modelo activo ({active_model}) no es multimodal; se proporcionan los metadatos "
                             "y el texto OCR extraído de la imagen."
+                        )
+                return json.dumps(res, indent=2, ensure_ascii=False)
+
+            elif original_name == "read_audio":
+                aud_path = arguments.get("path", "").strip()
+                if not aud_path:
+                    return "Error: El parámetro 'path' es obligatorio para leer un archivo de audio."
+
+                active_model = config_manager.get_active_model() if config_manager else ""
+                provider = config_manager.data["llm"].get("provider", "") if config_manager else ""
+                audio_multimodal = is_model_audio_multimodal(active_model, provider) if active_model else True
+
+                res = process_audio(
+                    path=aud_path,
+                    include_base64=False,
+                    target_provider=provider,
+                    target_model=active_model
+                )
+                if res.get("status") == "ok":
+                    res["model_is_audio_multimodal"] = audio_multimodal
+                    res["multimodal_ready"] = audio_multimodal
+                    if audio_multimodal:
+                        res["audio_note"] = (
+                            "El archivo de audio ha sido cargado e inyectado multimodalmente en tu contexto actual. "
+                            "Escúchalo y analízalo directamente en tu siguiente respuesta."
+                        )
+                    else:
+                        res["audio_note"] = (
+                            f"El modelo activo ({active_model}) no soporta entrada de audio multimodal directa; "
+                            "se proporcionan únicamente los metadatos técnicos del archivo."
                         )
                 return json.dumps(res, indent=2, ensure_ascii=False)
 

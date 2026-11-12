@@ -334,6 +334,9 @@ class MainWindow(Adw.ApplicationWindow):
         # Initial thread restoration or welcome message
         self._init_thread()
 
+        # Listen for automatic or remote thread title changes
+        self.agent.add_title_listener(self._on_global_thread_title_updated)
+
         # Update indicators
         self.update_status_indicators()
 
@@ -361,12 +364,20 @@ class MainWindow(Adw.ApplicationWindow):
         self.threads_btn.connect("clicked", lambda _b: self._on_toggle_sidebar())
         header.pack_start(self.threads_btn)
 
-        # 2. New thread button
-        self.new_thread_btn = Gtk.Button(icon_name="document-new-symbolic")
-        self.new_thread_btn.set_tooltip_text("Nuevo chat (Ctrl+N)")
+        # 2. New thread button (with agent selection menu)
+        self.new_thread_btn = Gtk.MenuButton(icon_name="document-new-symbolic")
+        self.new_thread_btn.set_tooltip_text("Nuevo chat (Ctrl+N) · Mantén pulsado/clic para elegir agente")
         self.new_thread_btn.add_css_class("flat")
         self.new_thread_btn.add_css_class("header-icon-btn")
-        self.new_thread_btn.connect("clicked", lambda _b: self._on_new_thread())
+        self._new_thread_popover = Gtk.Popover()
+        self._new_thread_popover_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        self._new_thread_popover_box.set_margin_top(6)
+        self._new_thread_popover_box.set_margin_bottom(6)
+        self._new_thread_popover_box.set_margin_start(6)
+        self._new_thread_popover_box.set_margin_end(6)
+        self._new_thread_popover.set_child(self._new_thread_popover_box)
+        self.new_thread_btn.set_popover(self._new_thread_popover)
+        self.new_thread_btn.connect("notify::active", lambda *_: self._refresh_new_thread_popover())
         header.pack_start(self.new_thread_btn)
 
         # Center Title & Model pill
@@ -534,7 +545,30 @@ class MainWindow(Adw.ApplicationWindow):
         self.menu_theme_btn.connect("clicked", lambda _b: (popover.popdown(), self._on_toggle_theme()))
         box.append(self.menu_theme_btn)
 
-        # 5. Limpiar conversación actual
+        # 5. Registros en tiempo real (Logs) [Ctrl+Shift+L]
+        self.menu_logs_btn = Gtk.Button()
+        self.menu_logs_btn.add_css_class("flat")
+        self.menu_logs_btn.add_css_class("menu-item-row")
+        logs_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        logs_box.set_halign(Gtk.Align.FILL)
+        logs_box.set_hexpand(True)
+        logs_icon = Gtk.Image.new_from_icon_name("text-x-generic-symbolic")
+        logs_icon.set_pixel_size(14)
+        logs_icon.add_css_class("menu-icon-terminal")
+        logs_label = Gtk.Label(label="Registros en tiempo real (Logs)", xalign=0)
+        logs_label.set_halign(Gtk.Align.START)
+        logs_label.set_hexpand(True)
+        logs_label.add_css_class("menu-item-label")
+        logs_accel = Gtk.Label(label="Ctrl+⇧+L")
+        logs_accel.add_css_class("menu-accel-label")
+        logs_box.append(logs_icon)
+        logs_box.append(logs_label)
+        logs_box.append(logs_accel)
+        self.menu_logs_btn.set_child(logs_box)
+        self.menu_logs_btn.connect("clicked", lambda _b: (popover.popdown(), self._on_open_logs()))
+        box.append(self.menu_logs_btn)
+
+        # 6. Limpiar conversación actual
         self.menu_clear_btn = Gtk.Button()
         self.menu_clear_btn.add_css_class("flat")
         self.menu_clear_btn.add_css_class("menu-item-row")
@@ -601,13 +635,13 @@ class MainWindow(Adw.ApplicationWindow):
         # Horizontal input row
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
 
-        # Attach file/image button
+        # Attach file/image/audio button
         self.attach_btn = Gtk.Button(icon_name="mail-attachment-symbolic")
         self.attach_btn.add_css_class("flat")
         self.attach_btn.add_css_class("attach-button")
         self.attach_btn.set_valign(Gtk.Align.END)
         self.attach_btn.set_margin_bottom(2)
-        self.attach_btn.set_tooltip_text("Adjuntar documentos o imágenes (Ctrl+U)")
+        self.attach_btn.set_tooltip_text("Adjuntar audio, imágenes o documentos (Ctrl+U)")
         self.attach_btn.connect("clicked", self._on_attach_clicked)
         bar.append(self.attach_btn)
 
@@ -718,19 +752,26 @@ class MainWindow(Adw.ApplicationWindow):
         return False
 
     def _on_attach_clicked(self, _btn):
-        """Opens native file selector to attach images or documents."""
+        """Opens native file selector to attach audio, images or documents."""
         try:
             filters = Gio.ListStore.new(Gtk.FileFilter)
 
             f_all_supported = Gtk.FileFilter()
-            f_all_supported.set_name("Imágenes y Documentos")
+            f_all_supported.set_name("Audio, Imágenes y Documentos")
             for pat in (
+                "*.wav", "*.mp3", "*.ogg", "*.oga", "*.opus", "*.flac", "*.m4a", "*.aac", "*.webm", "*.wma", "*.aiff", "*.aif", "*.amr",
                 "*.png", "*.jpg", "*.jpeg", "*.webp", "*.gif", "*.bmp", "*.svg", "*.tiff",
                 "*.pdf", "*.docx", "*.odt", "*.xlsx", "*.pptx", "*.csv", "*.tsv", "*.epub",
                 "*.md", "*.txt", "*.json", "*.yaml", "*.yml", "*.html", "*.rtf", "*.py", "*.js", "*.ts", "*.sh"
             ):
                 f_all_supported.add_pattern(pat)
             filters.append(f_all_supported)
+
+            f_audio = Gtk.FileFilter()
+            f_audio.set_name("Audio (WAV, MP3, OGG, OPUS, FLAC, M4A, AAC)")
+            for pat in ("*.wav", "*.mp3", "*.ogg", "*.oga", "*.opus", "*.flac", "*.m4a", "*.aac", "*.webm", "*.wma", "*.aiff", "*.aif", "*.amr"):
+                f_audio.add_pattern(pat)
+            filters.append(f_audio)
 
             f_images = Gtk.FileFilter()
             f_images.set_name("Imágenes (PNG, JPG, WEBP, GIF, SVG)")
@@ -751,13 +792,13 @@ class MainWindow(Adw.ApplicationWindow):
 
             if hasattr(Gtk, "FileDialog"):
                 dialog = Gtk.FileDialog()
-                dialog.set_title("Adjuntar documentos o imágenes")
+                dialog.set_title("Adjuntar audio, imágenes o documentos")
                 dialog.set_filters(filters)
                 dialog.set_default_filter(f_all_supported)
                 dialog.open_multiple(self, None, self._on_file_dialog_ready)
             else:
                 chooser = Gtk.FileChooserNative.new(
-                    "Adjuntar documentos o imágenes",
+                    "Adjuntar audio, imágenes o documentos",
                     self,
                     Gtk.FileChooserAction.OPEN,
                     "Adjuntar",
@@ -816,7 +857,7 @@ class MainWindow(Adw.ApplicationWindow):
 
     def _refresh_attachments_preview(self):
         """Updates the pending attachment chips inside the input bar."""
-        from pequeno_asistente.agent.media_processor import is_image_file, format_file_size
+        from pequeno_asistente.agent.media_processor import is_image_file, is_audio_file, format_file_size
 
         while child := self.attachments_box.get_first_child():
             self.attachments_box.remove(child)
@@ -856,6 +897,10 @@ class MainWindow(Adw.ApplicationWindow):
                     icon = Gtk.Image.new_from_icon_name("image-x-generic-symbolic")
                     icon.set_pixel_size(14)
                     chip.append(icon)
+            elif is_audio_file(path):
+                icon = Gtk.Image.new_from_icon_name("audio-x-generic-symbolic")
+                icon.set_pixel_size(14)
+                chip.append(icon)
             else:
                 icon = Gtk.Image.new_from_icon_name("x-office-document-symbolic")
                 icon.set_pixel_size(14)
@@ -938,28 +983,200 @@ class MainWindow(Adw.ApplicationWindow):
             self._refresh_sidebar()
         self.split_view.set_show_sidebar(vis)
 
-    def _on_new_thread(self):
-        """Starts a fresh new conversation thread without aborting background threads."""
+    def _refresh_new_thread_popover(self):
+        box = getattr(self, "_new_thread_popover_box", None)
+        if not box:
+            return
+        while child := box.get_first_child():
+            box.remove(child)
+        title = Gtk.Label(label="<b>Nuevo chat</b>", use_markup=True, xalign=0)
+        title.set_margin_bottom(2)
+        box.append(title)
+
+        # Workspaces
+        workspaces = []
+        try:
+            workspaces = list(self.config_manager.get_workspaces().values()) if hasattr(self.config_manager, "get_workspaces") else []
+        except Exception:
+            workspaces = []
+        workspaces = [w for w in workspaces if isinstance(w, dict)]
+        workspaces.sort(key=lambda w: (w.get("name") or w.get("id") or "").lower())
+
+        ws_lbl = Gtk.Label(label="<small>Workspace (proyecto/carpetas)</small>", use_markup=True, xalign=0)
+        ws_lbl.add_css_class("dim-label")
+        box.append(ws_lbl)
+
+        def_btn = Gtk.Button(label="Sin workspace (general)")
+        def_btn.add_css_class("flat")
+        def_btn.set_halign(Gtk.Align.START)
+        def_btn.connect("clicked", lambda *_: (self._new_thread_popover.popdown(), self._on_new_thread()))
+        box.append(def_btn)
+
+        if workspaces:
+            for ws in workspaces:
+                wid = ws.get("id") or ""
+                wname = ws.get("name") or wid or "Workspace"
+                folders = ws.get("folders") or []
+                if not folders and ws.get("workspace_path"):
+                    folders = [ws.get("workspace_path")]
+                txt = wname
+                if folders:
+                    txt = f"{wname}  ·  {Path(folders[0]).name}"
+                btn = Gtk.Button(label=f"📁 {txt}")
+                btn.add_css_class("flat")
+                btn.set_halign(Gtk.Align.START)
+                btn.connect("clicked", lambda _b, w=wid: (self._new_thread_popover.popdown(), self._on_new_thread(workspace_id=w)))
+                box.append(btn)
+        else:
+            hint = Gtk.Label(label="<small>Crea workspaces en Configuración → Workspaces</small>", use_markup=True, xalign=0)
+            hint.add_css_class("dim-label")
+            hint.set_margin_top(2)
+            box.append(hint)
+
+        # Agents (prompt-only, reusable in any workspace)
+        agents = []
+        try:
+            agents = list(self.config_manager.get_agents().values())
+        except Exception:
+            agents = []
+        agents = [a for a in agents if isinstance(a, dict)]
+        agents.sort(key=lambda a: (a.get("name") or a.get("id") or "").lower())
+
+        sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        sep.set_margin_top(6); sep.set_margin_bottom(2)
+        box.append(sep)
+        ag_lbl = Gtk.Label(label="<small>Agente especializado (prompt, en cualquier workspace)</small>", use_markup=True, xalign=0)
+        ag_lbl.add_css_class("dim-label")
+        box.append(ag_lbl)
+
+        # Determine current workspace context to reuse when starting with an agent
+        cur_ws_id = None
+        try:
+            cur_tid = self.agent.active_thread_id
+            if cur_tid and self.thread_manager:
+                cur_th = self.thread_manager.get_thread(cur_tid)
+                if cur_th:
+                    cur_ws_id = cur_th.get("workspace_id")
+        except Exception:
+            cur_ws_id = None
+
+        if agents:
+            for ag in agents:
+                aid = ag.get("id") or ""
+                name = ag.get("name") or aid or "Agente"
+                btn = Gtk.Button(label=f"🤖 {name}" + ("  (workspace actual)" if cur_ws_id else ""))
+                btn.add_css_class("flat")
+                btn.set_halign(Gtk.Align.START)
+                btn.connect("clicked", lambda _b, a=aid, w=cur_ws_id: (self._new_thread_popover.popdown(), self._on_new_thread(agent_id=a, workspace_id=w)))
+                box.append(btn)
+        else:
+            hint = Gtk.Label(label="<small>Crea agentes en Configuración → Agentes</small>", use_markup=True, xalign=0)
+            hint.add_css_class("dim-label")
+            hint.set_margin_top(2)
+            box.append(hint)
+
+    def _on_new_thread(
+        self,
+        agent_id: Optional[str] = None,
+        agent_profile: Optional[dict] = None,
+        workspace_id: Optional[str] = None,
+        workspace_profile: Optional[dict] = None
+    ):
+        """Starts a fresh new conversation thread without aborting background threads.
+        Can bind to a workspace (folders + contextual memory) and/or an agent (prompt-only)."""
         if hasattr(self, "call_engine") and self.call_engine.is_active:
             self._on_end_call()
 
-        # If current active thread is already empty and not running, reuse it
-        cur_tid = self.agent.active_thread_id
-        if cur_tid and not self.agent.is_thread_running(cur_tid):
-            cur_th = self.thread_manager.get_thread(cur_tid) if self.thread_manager else None
-            if cur_th and len(cur_th.get("messages", [])) == 0:
-                self.chat_stack.set_visible_child_name(cur_tid)
-                self._update_header_title("Pequeño Asistente")
-                self.split_view.set_show_sidebar(False)
-                self._refresh_sidebar()
-                self.text_view.grab_focus()
-                return
+        # Resolve workspace profile
+        resolved_ws = workspace_profile
+        resolved_ws_id = workspace_id
+        if resolved_ws_id and not resolved_ws and hasattr(self.config_manager, "get_workspace"):
+            try:
+                resolved_ws = self.config_manager.get_workspace(resolved_ws_id)
+                if resolved_ws:
+                    resolved_ws = dict(resolved_ws)
+            except Exception:
+                resolved_ws = None
+        if resolved_ws:
+            folders = resolved_ws.get("folders") or []
+            if not folders and resolved_ws.get("workspace_path"):
+                folders = [resolved_ws.get("workspace_path")]
+            norm_folders = []
+            for f in folders:
+                if not f:
+                    continue
+                try:
+                    p = Path(f).expanduser().resolve()
+                    p.mkdir(parents=True, exist_ok=True)
+                    norm_folders.append(str(p))
+                except Exception:
+                    norm_folders.append(str(f))
+            resolved_ws["folders"] = norm_folders
+            mem_file = (resolved_ws.get("memory_file") or "").strip()
+            if not mem_file and norm_folders:
+                mem_file = str(Path(norm_folders[0]) / "CONTEXT.md")
+            if mem_file:
+                try:
+                    mp = Path(mem_file).expanduser()
+                    if not mp.is_absolute() and norm_folders:
+                        mp = Path(norm_folders[0]) / mp
+                    mp = mp.resolve()
+                    mp.parent.mkdir(parents=True, exist_ok=True)
+                    if not mp.exists():
+                        ws_name = resolved_ws.get("name") or "Workspace"
+                        mp.write_text(f"# Memoria contextual del workspace: {ws_name}\n\nNotas, decisiones y contexto persistente del proyecto.\n", encoding="utf-8")
+                    resolved_ws["memory_file"] = str(mp)
+                except Exception:
+                    resolved_ws["memory_file"] = mem_file
 
-        new_th = self.agent.new_thread(title="Nueva conversación")
+        # Resolve agent profile (prompt-only)
+        resolved_profile = agent_profile
+        resolved_id = agent_id
+        if resolved_id and not resolved_profile:
+            try:
+                resolved_profile = self.config_manager.get_agent(resolved_id)
+                if resolved_profile:
+                    resolved_profile = dict(resolved_profile)
+            except Exception:
+                resolved_profile = None
+        if resolved_profile:
+            resolved_profile.pop("workspace_path", None)
+            resolved_profile.pop("folders", None)
+
+        # Reuse empty general thread only when nothing specialized requested
+        if not resolved_profile and not resolved_id and not resolved_ws and not resolved_ws_id:
+            cur_tid = self.agent.active_thread_id
+            if cur_tid and not self.agent.is_thread_running(cur_tid):
+                cur_th = self.thread_manager.get_thread(cur_tid) if self.thread_manager else None
+                if cur_th and len(cur_th.get("messages", [])) == 0 and not cur_th.get("agent_profile") and not cur_th.get("workspace_profile"):
+                    self.chat_stack.set_visible_child_name(cur_tid)
+                    self._update_header_title("Pequeño Asistente")
+                    self.split_view.set_show_sidebar(False)
+                    self._refresh_sidebar()
+                    self.text_view.grab_focus()
+                    return
+
+        title = "Nueva conversación"
+        if resolved_ws and resolved_ws.get("name"):
+            title = resolved_ws.get("name")
+        if resolved_profile and resolved_profile.get("name"):
+            aname = resolved_profile.get("name")
+            if resolved_ws and resolved_ws.get("name"):
+                title = f"{aname} · {resolved_ws.get('name')}"
+            else:
+                title = aname
+
+        new_th = self.agent.new_thread(
+            title=title,
+            agent_id=resolved_id,
+            agent_profile=resolved_profile,
+            workspace_id=resolved_ws_id or (resolved_ws.get("id") if resolved_ws else None),
+            workspace_profile=resolved_ws
+        )
         new_tid = new_th["id"]
         self._get_or_create_chat_view(new_tid)
         self.chat_stack.set_visible_child_name(new_tid)
-        self._update_header_title("Pequeño Asistente")
+        self._update_header_title(title)
 
         self.send_btn.set_visible(True)
         self.stop_btn.set_visible(False)
@@ -980,7 +1197,11 @@ class MainWindow(Adw.ApplicationWindow):
 
         th = self.thread_manager.get_thread(thread_id) if self.thread_manager else None
         if th:
-            self._update_header_title(th.get("title"))
+            title = th.get("title")
+            ap = th.get("agent_profile") or {}
+            if ap.get("name") and title in (None, "", "Nueva conversación"):
+                title = ap.get("name")
+            self._update_header_title(title)
 
         is_running = self.agent.is_thread_running(thread_id)
         has_queue = self.agent.has_queued_turns(thread_id)
@@ -1099,6 +1320,9 @@ class MainWindow(Adw.ApplicationWindow):
             return True
         elif ctrl and keyval in (Gdk.KEY_m, Gdk.KEY_M):
             self._on_mic_clicked(None)
+            return True
+        elif ctrl and (state & Gdk.ModifierType.SHIFT_MASK) and keyval in (Gdk.KEY_l, Gdk.KEY_L):
+            self._on_open_logs()
             return True
         elif ctrl and keyval in (Gdk.KEY_l, Gdk.KEY_L):
             self._on_toggle_call()
@@ -1419,7 +1643,8 @@ class MainWindow(Adw.ApplicationWindow):
             on_tool_start=lambda name, args, cv=target_cv: run_ui(cv.start_tool_card, name, args),
             on_tool_end=lambda name, res, cv=target_cv: run_ui(cv.finish_tool_card, name, res),
             on_complete=lambda _final, t=tid, cv=target_cv: run_ui(self._on_turn_completed, t, cv),
-            on_error=lambda err, t=tid, cv=target_cv: run_ui(self._on_turn_error, t, cv, err)
+            on_error=lambda err, t=tid, cv=target_cv: run_ui(self._on_turn_error, t, cv, err),
+            on_thread_title_updated=lambda t, title: run_ui(self._on_thread_title_updated, t, title)
         )
 
         # Check if agent is currently speaking or running in this thread
@@ -1530,6 +1755,21 @@ class MainWindow(Adw.ApplicationWindow):
         self.update_status_indicators()
         return False
 
+    def _on_thread_title_updated(self, thread_id: str, new_title: str):
+        """Called when a thread title is updated or auto-generated by AI."""
+        if thread_id == self.agent.active_thread_id:
+            self._update_header_title(new_title)
+        self._refresh_sidebar()
+
+    def _on_global_thread_title_updated(self, thread_id: str, new_title: str):
+        """Global listener callback invoked from background threads or API."""
+        def _once():
+            if thread_id == self.agent.active_thread_id:
+                self._update_header_title(new_title)
+            self._refresh_sidebar()
+            return False
+        GLib.idle_add(_once)
+
     def _on_turn_error(self, thread_id: str, target_cv: ChatView, error_message: str):
         target_cv.add_system_notice(f"⚠️ {error_message}", is_error=True)
         if thread_id == self.agent.active_thread_id:
@@ -1566,6 +1806,19 @@ class MainWindow(Adw.ApplicationWindow):
         self.stop_btn.set_visible(False)
         self._refresh_sidebar()
         self.update_status_indicators()
+
+    def _on_open_logs(self):
+        """Opens the real-time log viewer window."""
+        from pequeno_asistente.ui.log_viewer import LogViewerWindow
+        if hasattr(self, "_log_viewer_win") and self._log_viewer_win is not None:
+            try:
+                self._log_viewer_win.present()
+                return
+            except Exception:
+                self._log_viewer_win = None
+        self._log_viewer_win = LogViewerWindow(parent_window=self)
+        self._log_viewer_win.connect("close-request", lambda *_: setattr(self, "_log_viewer_win", None) or False)
+        self._log_viewer_win.present()
 
     def _on_clear_chat(self, _btn):
         if hasattr(self, "call_engine") and self.call_engine.is_active:
@@ -1903,6 +2156,10 @@ class MainWindow(Adw.ApplicationWindow):
             self.tts.elevenlabs.stability = float(el_cfg.get("stability", 0.5))
             self.tts.elevenlabs.similarity_boost = float(el_cfg.get("similarity_boost", 0.75))
             self.tts.elevenlabs.enabled = el_cfg.get("enabled", True)
+
+            # System TTS (spd-say)
+            if hasattr(self.tts, "system_tts"):
+                self.tts.system_tts.lang = kokoro_cfg.get("lang", "es")
 
         win = SettingsWindow(
             self.config_manager,

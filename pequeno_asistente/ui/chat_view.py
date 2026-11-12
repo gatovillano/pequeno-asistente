@@ -920,8 +920,8 @@ def _clean_user_display_text(text: Any) -> str:
     elif not isinstance(text, str):
         text = str(text or "")
 
-    text = re.sub(r"\n?<attached_(?:document|image)\b[^>]*>[\s\S]*?</attached_(?:document|image)>", "", text)
-    text = re.sub(r"\n?<attached_(?:document|image)\b[^>]*/?>", "", text)
+    text = re.sub(r"\n?<attached_(?:document|image|audio)\b[^>]*>[\s\S]*?</attached_(?:document|image|audio)>", "", text)
+    text = re.sub(r"\n?<attached_(?:document|image|audio)\b[^>]*/?>", "", text)
     return text.strip()
 
 
@@ -1024,8 +1024,8 @@ class MessageBubble(Gtk.Box):
             self.finalize()
 
     def _build_attachments_gallery(self, attachments: List[Any]) -> Gtk.Box:
-        """Builds visual thumbnails for attached images and badges for attached documents."""
-        from pequeno_asistente.agent.media_processor import is_image_file, format_file_size
+        """Builds visual thumbnails for attached images and badges for attached audio and documents."""
+        from pequeno_asistente.agent.media_processor import is_image_file, is_audio_file, format_file_size
 
         gallery = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         gallery.add_css_class("message-attachments-gallery")
@@ -1034,18 +1034,22 @@ class MessageBubble(Gtk.Box):
             if isinstance(att, dict):
                 path = att.get("path", "")
                 name = att.get("name") or os.path.basename(path) or "Archivo"
-                att_type = att.get("type") or ("image" if is_image_file(path) else "document")
+                att_type = att.get("type") or (
+                    "image" if is_image_file(path) else ("audio" if is_audio_file(path) else "document")
+                )
                 size_str = att.get("size_human", "")
                 fmt_str = att.get("format", "")
+                duration_str = att.get("duration_human", "")
             else:
                 path = str(att)
                 name = os.path.basename(path) or path
-                att_type = "image" if is_image_file(path) else "document"
+                att_type = "image" if is_image_file(path) else ("audio" if is_audio_file(path) else "document")
                 try:
                     size_str = format_file_size(os.path.getsize(path)) if os.path.isfile(path) else ""
                 except Exception:
                     size_str = ""
                 fmt_str = os.path.splitext(name)[1].lstrip(".").upper()
+                duration_str = ""
 
             if att_type == "image" and path and os.path.isfile(path):
                 img_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
@@ -1077,6 +1081,29 @@ class MessageBubble(Gtk.Box):
                 cap_lbl.add_css_class("attachment-caption-label")
                 img_card.append(cap_lbl)
                 gallery.append(img_card)
+            elif att_type == "audio":
+                aud_chip = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+                aud_chip.add_css_class("message-attachment-doc")
+                aud_chip.set_tooltip_text(f"{name}\n{path}")
+                icon = Gtk.Image.new_from_icon_name("audio-x-generic-symbolic")
+                icon.set_pixel_size(16)
+                aud_chip.append(icon)
+
+                info_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+                name_lbl = Gtk.Label(label=f"🎵 {name}", xalign=0)
+                name_lbl.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+                name_lbl.set_max_width_chars(30)
+                name_lbl.add_css_class("attachment-doc-name")
+                info_box.append(name_lbl)
+
+                sub_parts = [p for p in ("Audio", fmt_str, duration_str, size_str) if p]
+                if sub_parts:
+                    sub_lbl = Gtk.Label(label=" • ".join(sub_parts), xalign=0)
+                    sub_lbl.add_css_class("attachment-doc-meta")
+                    info_box.append(sub_lbl)
+
+                aud_chip.append(info_box)
+                gallery.append(aud_chip)
             else:
                 doc_chip = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
                 doc_chip.add_css_class("message-attachment-doc")
@@ -1295,6 +1322,9 @@ class ChatView(Gtk.ScrolledWindow):
         self.set_hexpand(True)
 
         self._scroll_pending = False
+        self._auto_scroll = True
+        self._programmatic_scroll = False
+        self._scroll_threshold = 80
         self.container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         self.container.set_margin_top(12)
         self.container.set_margin_bottom(12)
@@ -1315,6 +1345,11 @@ class ChatView(Gtk.ScrolledWindow):
         self.current_tool_card: Optional[ToolCard] = None
         self.welcome_widget: Optional[WelcomeWidget] = None
 
+        vadj = self.get_vadjustment()
+        vadj.connect("value-changed", self._on_scroll_value_changed)
+        vadj.connect("notify::upper", self._on_scroll_metrics_changed)
+        vadj.connect("notify::page-size", self._on_scroll_metrics_changed)
+
     def show_welcome(self, on_suggestion_clicked: Callable[[str], None]):
         """Displays modern welcome empty state."""
         self.clear()
@@ -1330,7 +1365,7 @@ class ChatView(Gtk.ScrolledWindow):
         self.hide_welcome()
         bubble = MessageBubble("user", text, is_queued=is_queued, attachments=attachments)
         self.container.append(bubble)
-        self.scroll_to_bottom()
+        self.scroll_to_bottom(force=True)
         return bubble
 
     def start_assistant_message(self) -> MessageBubble:
@@ -1338,7 +1373,7 @@ class ChatView(Gtk.ScrolledWindow):
         self.current_assistant_bubble = MessageBubble("assistant", "", on_tts_requested=self.on_tts_requested)
         self.last_assistant_bubble = self.current_assistant_bubble
         self.container.append(self.current_assistant_bubble)
-        self.scroll_to_bottom()
+        self.scroll_to_bottom(force=True)
         return self.current_assistant_bubble
 
     def append_assistant_thought(self, chunk: str):
@@ -1506,7 +1541,24 @@ class ChatView(Gtk.ScrolledWindow):
 
         self.scroll_to_bottom()
 
-    def scroll_to_bottom(self):
+    def _is_at_bottom(self) -> bool:
+        adj = self.get_vadjustment()
+        return adj.get_value() + adj.get_page_size() >= adj.get_upper() - self._scroll_threshold
+
+    def _on_scroll_value_changed(self, _adj):
+        if self._programmatic_scroll:
+            return
+        self._auto_scroll = self._is_at_bottom()
+
+    def _on_scroll_metrics_changed(self, *_args):
+        if self._auto_scroll and not self._is_at_bottom():
+            self.scroll_to_bottom()
+
+    def scroll_to_bottom(self, force: bool = False):
+        if force:
+            self._auto_scroll = True
+        if not self._auto_scroll:
+            return
         if not self._scroll_pending:
             self._scroll_pending = True
             GLib.idle_add(self._do_scroll)
@@ -1514,5 +1566,9 @@ class ChatView(Gtk.ScrolledWindow):
     def _do_scroll(self):
         self._scroll_pending = False
         adj = self.get_vadjustment()
-        adj.set_value(adj.get_upper() - adj.get_page_size())
+        self._programmatic_scroll = True
+        try:
+            adj.set_value(max(0, adj.get_upper() - adj.get_page_size()))
+        finally:
+            self._programmatic_scroll = False
         return False

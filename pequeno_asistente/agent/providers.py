@@ -15,6 +15,7 @@ PROVIDER_ENV_VARS: Dict[str, str] = {
     "kilocode": "KILOCODE_API_KEY",
     "inception": "INCEPTION_API_KEY",
     "opencode": "OPENCODE_API_KEY",
+    "vercel": "VERCEL_AI_GATEWAY_API_KEY",
     "cohere": "COHERE_API_KEY",
     "zhipuai": "ZHIPUAI_API_KEY",
     "litellm": "LITELLM_API_KEY"
@@ -120,6 +121,19 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
             "opencode/claude-sonnet-4-5",
             "opencode/gpt-5.5",
             "opencode/gemini-3-flash"
+        ]
+    },
+    "vercel": {
+        "name": "Vercel AI Gateway",
+        "description": "Pasarela unificada de Vercel con acceso a modelos de Anthropic, OpenAI, Meta, Google, DeepSeek y más.",
+        "env_var": "VERCEL_AI_GATEWAY_API_KEY",
+        "default_model": "vercel/anthropic/claude-sonnet-4.5",
+        "suggested_models": [
+            "vercel/anthropic/claude-sonnet-4.5",
+            "vercel/openai/gpt-4o",
+            "vercel/google/gemini-2.5-flash",
+            "vercel/meta/llama-3.3-70b",
+            "vercel/deepseek/deepseek-r1"
         ]
     }
 }

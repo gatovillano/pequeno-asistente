@@ -92,6 +92,8 @@ class SettingsWindow(Adw.PreferencesWindow):
         self._build_api_keys_page()
         self._build_mcp_catalog_page()
         self._build_skills_page()
+        self._build_workspaces_page()
+        self._build_agents_page()
         self._build_heartbeats_page()
         self._build_audio_page()
         self._build_memory_page()
@@ -2301,6 +2303,644 @@ class SettingsWindow(Adw.PreferencesWindow):
         msg_dialog.connect("response", _on_response)
         msg_dialog.present()
 
+
+    # -------------------------------------------------------------
+    # TAB: WORKSPACES (proyecto/carpetas + memoria contextual)
+    # -------------------------------------------------------------
+    def _build_workspaces_page(self):
+        page = Adw.PreferencesPage()
+        page.set_title("Workspaces")
+        page.set_icon_name("folder-symbolic")
+
+        info_grp = Adw.PreferencesGroup()
+        info_grp.set_title("Workspaces de Proyecto")
+        info_grp.set_description(
+            "Crea workspaces para organizar hilos de chat independientes asociados a una o varias carpetas (proyecto). "
+            "Cada workspace puede tener un archivo de memoria contextual para el agente."
+        )
+
+        header_row = Adw.ActionRow(
+            title="Gestión de Workspaces",
+            subtitle="Asocia carpetas del proyecto (explorador de archivos) y genera automáticamente la memoria contextual (CONTEXT.md)."
+        )
+        add_btn = Gtk.Button(label="+ Nuevo Workspace")
+        add_btn.add_css_class("suggested-action")
+        add_btn.connect("clicked", lambda _b: self._on_edit_workspace(None))
+        header_row.add_suffix(add_btn)
+        info_grp.add(header_row)
+        page.add(info_grp)
+
+        self.workspaces_list_grp = Adw.PreferencesGroup()
+        self.workspaces_list_grp.set_title("Workspaces Configurados")
+        self.workspaces_list_grp.set_description("Workspaces disponibles para iniciar conversaciones en contexto de proyecto.")
+        page.add(self.workspaces_list_grp)
+
+        self._workspaces_rows_widgets = []
+        self.add(page)
+        self._refresh_workspaces_list()
+
+    def _refresh_workspaces_list(self):
+        if not hasattr(self, "workspaces_list_grp") or self.workspaces_list_grp is None:
+            return
+        for w in list(getattr(self, "_workspaces_rows_widgets", [])):
+            try:
+                self.workspaces_list_grp.remove(w)
+            except Exception:
+                pass
+        self._workspaces_rows_widgets = []
+
+        workspaces = self.config_manager.get_workspaces() if hasattr(self.config_manager, "get_workspaces") else {}
+        items = list(workspaces.values()) if isinstance(workspaces, dict) else []
+        items = [w for w in items if isinstance(w, dict)]
+        items.sort(key=lambda x: (x.get("name") or x.get("id") or "").lower())
+
+        if not items:
+            empty_row = Adw.ActionRow(
+                title="No hay workspaces",
+                subtitle="Pulsa '+ Nuevo Workspace' para elegir carpetas del proyecto; la memoria contextual se crea automáticamente."
+            )
+            self.workspaces_list_grp.add(empty_row)
+            self._workspaces_rows_widgets.append(empty_row)
+            return
+
+        for ws in items:
+            wid = ws.get("id", "")
+            name = ws.get("name") or wid or "Workspace"
+            desc = ws.get("description") or ""
+            folders = ws.get("folders") or []
+            if not folders and ws.get("workspace_path"):
+                folders = [ws.get("workspace_path")]
+            mem_file = ws.get("memory_file") or ""
+
+            row = Adw.ActionRow()
+            row.set_title(f"<b>{html.escape(name)}</b>")
+            subtitle_parts = []
+            if desc:
+                subtitle_parts.append(html.escape(desc))
+            if folders:
+                if len(folders) == 1:
+                    subtitle_parts.append(f"📁 <tt>{html.escape(folders[0])}</tt>")
+                else:
+                    subtitle_parts.append(f"📁 {len(folders)} carpetas: <tt>{html.escape(folders[0])}</tt> …")
+            if mem_file:
+                subtitle_parts.append(f"🧠 Memoria: <tt>{html.escape(mem_file)}</tt>")
+            row.set_subtitle("\n".join(subtitle_parts) if subtitle_parts else "Sin carpetas ni memoria configuradas")
+            row.set_title_lines(1)
+            row.set_subtitle_lines(3)
+
+            new_chat_btn = Gtk.Button(label="Nuevo chat")
+            new_chat_btn.add_css_class("flat")
+            new_chat_btn.set_tooltip_text("Crear una conversación nueva en este workspace")
+            new_chat_btn.connect("clicked", lambda _b, w=wid: self._on_create_workspace_chat(w))
+            row.add_suffix(new_chat_btn)
+
+            edit_btn = Gtk.Button(icon_name="document-edit-symbolic")
+            edit_btn.add_css_class("flat")
+            edit_btn.set_tooltip_text("Editar workspace")
+            edit_btn.connect("clicked", lambda _b, w=dict(ws): self._on_edit_workspace(w))
+            row.add_suffix(edit_btn)
+
+            del_btn = Gtk.Button(icon_name="user-trash-symbolic")
+            del_btn.add_css_class("flat")
+            del_btn.set_tooltip_text("Eliminar workspace")
+            del_btn.connect("clicked", lambda _b, w=wid, n=name: self._on_delete_workspace(w, n))
+            row.add_suffix(del_btn)
+
+            self.workspaces_list_grp.add(row)
+            self._workspaces_rows_widgets.append(row)
+
+    def _on_create_workspace_chat(self, workspace_id: str):
+        try:
+            root = self.get_transient_for()
+            if root and hasattr(root, "_on_new_thread"):
+                root._on_new_thread(workspace_id=workspace_id)
+                root.present()
+                return
+        except Exception:
+            pass
+        dlg = Adw.MessageDialog(
+            transient_for=self,
+            heading="Workspace listo",
+            body="El workspace está configurado. Usa el botón 'Nuevo chat' de la ventana principal y selecciona este workspace."
+        )
+        dlg.add_response("ok", "Entendido")
+        dlg.present()
+
+    def _on_delete_workspace(self, workspace_id: str, name: str):
+        msg = Adw.MessageDialog(
+            transient_for=self,
+            heading="¿Eliminar workspace?",
+            body=f"Se eliminará el workspace '{name}' de la configuración. Las carpetas y archivos de memoria en disco no se borran. Las conversaciones existentes conservarán su copia del perfil."
+        )
+        msg.add_response("cancel", "Cancelar")
+        msg.add_response("delete", "Eliminar")
+        msg.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
+
+        def _resp(_d, resp):
+            if resp == "delete":
+                self.config_manager.delete_workspace(workspace_id)
+                self._refresh_workspaces_list()
+        msg.connect("response", _resp)
+        msg.present()
+
+    def _on_edit_workspace(self, workspace_data):
+        is_new = not (workspace_data and workspace_data.get("id"))
+        win = Adw.Window()
+        win.set_transient_for(self)
+        win.set_modal(True)
+        win.set_default_size(660, 560)
+        win.set_title("Nuevo Workspace" if is_new else "Editar Workspace")
+        if not Adw.StyleManager.get_default().get_dark():
+            win.add_css_class("theme-light")
+
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        win.set_content(main_box)
+
+        header = Adw.HeaderBar()
+        cancel_btn = Gtk.Button(label="Cancelar")
+        cancel_btn.connect("clicked", lambda *_: win.close())
+        header.pack_start(cancel_btn)
+        save_btn = Gtk.Button(label="Guardar")
+        save_btn.add_css_class("suggested-action")
+        header.pack_end(save_btn)
+        main_box.append(header)
+
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scrolled.set_vexpand(True)
+        main_box.append(scrolled)
+
+        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        body.set_margin_top(12); body.set_margin_bottom(16)
+        body.set_margin_start(16); body.set_margin_end(16)
+        scrolled.set_child(body)
+
+        grp = Adw.PreferencesGroup(title="Perfil del Workspace")
+        name_row = Adw.EntryRow(title="Nombre del workspace/proyecto")
+        name_row.set_text((workspace_data or {}).get("name", ""))
+        grp.add(name_row)
+
+        desc_row = Adw.EntryRow(title="Descripción (opcional)")
+        desc_row.set_text((workspace_data or {}).get("description", ""))
+        grp.add(desc_row)
+        body.append(grp)
+
+        # Folders picker (file browser) - supports one or more folders
+        folders_grp = Adw.PreferencesGroup(
+            title="Carpetas asociadas",
+            description="Asocia una o varias carpetas del proyecto. Se abrirá el navegador de archivos para seleccionarlas."
+        )
+        selected_folders = []
+        existing_folders = (workspace_data or {}).get("folders") or []
+        if not existing_folders and (workspace_data or {}).get("workspace_path"):
+            existing_folders = [(workspace_data or {}).get("workspace_path")]
+        for f in existing_folders:
+            if f and str(f).strip():
+                selected_folders.append(str(f))
+
+        folders_list_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        folders_grp.add(Adw.ActionRow(child=folders_list_box))
+
+        add_folder_row = Adw.ActionRow(
+            title="Añadir carpeta…",
+            subtitle="Abre el explorador de archivos para seleccionar una carpeta del proyecto"
+        )
+        add_folder_btn = Gtk.Button(label="Examinar…")
+        add_folder_btn.add_css_class("suggested-action")
+        add_folder_row.add_suffix(add_folder_btn)
+        add_folder_row.set_activatable_widget(add_folder_btn)
+        folders_grp.add(add_folder_row)
+        body.append(folders_grp)
+
+        def _refresh_folders_ui():
+            while child := folders_list_box.get_first_child():
+                folders_list_box.remove(child)
+            if not selected_folders:
+                empty = Gtk.Label(label="No hay carpetas seleccionadas.", xalign=0)
+                empty.add_css_class("dim-label")
+                empty.set_margin_top(6); empty.set_margin_bottom(6)
+                empty.set_margin_start(8)
+                folders_list_box.append(empty)
+                return
+            for idx, folder_path in enumerate(list(selected_folders)):
+                row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+                row.set_margin_top(2); row.set_margin_bottom(2)
+                icon = Gtk.Image.new_from_icon_name("folder-symbolic")
+                row.append(icon)
+                lbl = Gtk.Label(label=folder_path, xalign=0)
+                lbl.set_hexpand(True)
+                lbl.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+                lbl.set_selectable(True)
+                lbl.set_tooltip_text(folder_path)
+                row.append(lbl)
+                rm = Gtk.Button(icon_name="user-trash-symbolic")
+                rm.add_css_class("flat")
+                rm.set_tooltip_text("Quitar carpeta")
+                def _rm(_b, i=idx):
+                    if 0 <= i < len(selected_folders):
+                        selected_folders.pop(i)
+                        _refresh_folders_ui()
+                rm.connect("clicked", _rm)
+                row.append(rm)
+                folders_list_box.append(row)
+
+        def _on_folder_selected(dialog, result, multiple=False):
+            try:
+                if multiple and hasattr(dialog, "select_multiple_folders_finish"):
+                    files = dialog.select_multiple_folders_finish(result)
+                    if files:
+                        n = files.get_n_items() if hasattr(files, "get_n_items") else 0
+                        for i in range(n):
+                            f = files.get_item(i)
+                            if f and hasattr(f, "get_path"):
+                                p = f.get_path()
+                                if p and p not in selected_folders:
+                                    selected_folders.append(p)
+                else:
+                    f = dialog.select_folder_finish(result)
+                    if f and hasattr(f, "get_path"):
+                        p = f.get_path()
+                        if p and p not in selected_folders:
+                            selected_folders.append(p)
+            except Exception:
+                # User cancelled or error
+                pass
+            _refresh_folders_ui()
+
+        def _browse_folder(_btn=None):
+            try:
+                if hasattr(Gtk, "FileDialog"):
+                    dialog = Gtk.FileDialog()
+                    dialog.set_title("Seleccionar carpeta del workspace")
+                    # Prefer multiple selection when available (GTK 4.10+)
+                    if hasattr(dialog, "select_multiple_folders"):
+                        dialog.select_multiple_folders(win, None, lambda d, r: _on_folder_selected(d, r, multiple=True))
+                        return
+                    dialog.select_folder(win, None, lambda d, r: _on_folder_selected(d, r, multiple=False))
+                    return
+            except Exception:
+                pass
+            # Fallback: Gtk.FileChooserNative
+            try:
+                chooser = Gtk.FileChooserNative.new(
+                    "Seleccionar carpeta del workspace",
+                    win,
+                    Gtk.FileChooserAction.SELECT_FOLDER,
+                    "Seleccionar",
+                    "Cancelar"
+                )
+                chooser.set_select_multiple(True)
+                def _on_native(resp_chooser, resp_id):
+                    try:
+                        if resp_id == Gtk.ResponseType.ACCEPT:
+                            files = resp_chooser.get_files()
+                            if files:
+                                n = files.get_n_items() if hasattr(files, "get_n_items") else 0
+                                for i in range(n):
+                                    f = files.get_item(i)
+                                    if f and hasattr(f, "get_path"):
+                                        p = f.get_path()
+                                        if p and p not in selected_folders:
+                                            selected_folders.append(p)
+                    except Exception:
+                        pass
+                    _refresh_folders_ui()
+                    resp_chooser.destroy()
+                chooser.connect("response", _on_native)
+                chooser.show()
+            except Exception as e:
+                status_lbl.set_markup(f"<span foreground='#f38ba8'>No se pudo abrir el explorador de archivos: {html.escape(str(e))}</span>")
+
+        add_folder_btn.connect("clicked", _browse_folder)
+        _refresh_folders_ui()
+
+        # Contextual memory file: created automatically in the first folder
+        mem_grp = Adw.PreferencesGroup(
+            title="Memoria contextual del workspace",
+            description="Archivo Markdown con contexto persistente del proyecto (decisiones, convenciones, notas). Se inyectará al agente en los chats de este workspace."
+        )
+        mem_info = Adw.ActionRow(
+            title="Archivo de memoria contextual (automático)",
+            subtitle="Se creará y usará automáticamente CONTEXT.md en la primera carpeta del workspace."
+        )
+        mem_badge = Gtk.Label(label="CONTEXT.md")
+        mem_badge.add_css_class("status-pill")
+        mem_info.add_suffix(mem_badge)
+        mem_grp.add(mem_info)
+        mem_hint = Gtk.Label(
+            label="<small>La memoria contextual se genera automáticamente al guardar (o se reutiliza si ya existe) dentro de la carpeta principal del proyecto.</small>",
+            use_markup=True, xalign=0, wrap=True
+        )
+        mem_hint.add_css_class("dim-label")
+        hint_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        hint_box.set_margin_start(12); hint_box.set_margin_end(12); hint_box.set_margin_bottom(6)
+        hint_box.append(mem_hint)
+        mem_grp.add(hint_box)
+        body.append(mem_grp)
+
+        status_lbl = Gtk.Label(label="", xalign=0, wrap=True)
+        status_lbl.add_css_class("dim-label")
+        body.append(status_lbl)
+
+        def _save(_btn):
+            name = name_row.get_text().strip()
+            desc = desc_row.get_text().strip()
+            folders = [f.strip() for f in selected_folders if f and str(f).strip()]
+            if not name:
+                status_lbl.set_markup("<span foreground='#f38ba8'>El nombre del workspace es obligatorio.</span>")
+                return
+            if not folders:
+                status_lbl.set_markup("<span foreground='#f38ba8'>Debes seleccionar al menos una carpeta para el workspace.</span>")
+                return
+
+            existing_id = (workspace_data or {}).get("id")
+            if existing_id:
+                workspace_id = existing_id
+            else:
+                import re, uuid
+                workspace_id = re.sub(r"[^a-zA-Z0-9_-]+", "-", name.lower()).strip("-")[:40] or f"workspace-{uuid.uuid4().hex[:6]}"
+
+            # normalize folders; contextual memory file is automatic (CONTEXT.md in first folder)
+            norm_folders = []
+            for f in folders:
+                try:
+                    p = Path(f).expanduser().resolve()
+                    p.mkdir(parents=True, exist_ok=True)
+                    norm_folders.append(str(p))
+                except Exception as ex:
+                    status_lbl.set_markup(f"<span foreground='#f38ba8'>No se pudo preparar la carpeta {html.escape(f)}: {html.escape(str(ex))}</span>")
+                    return
+
+            mem_file = str(Path(norm_folders[0]) / "CONTEXT.md")
+            try:
+                mp = Path(mem_file)
+                mp.parent.mkdir(parents=True, exist_ok=True)
+                if not mp.exists():
+                    mp.write_text(
+                        f"# Memoria contextual del workspace: {name}\n\n"
+                        "Notas, decisiones, convenciones y contexto persistente del proyecto.\n",
+                        encoding="utf-8"
+                    )
+            except Exception as ex:
+                status_lbl.set_markup(f"<span foreground='#f38ba8'>No se pudo crear el archivo de memoria contextual: {html.escape(str(ex))}</span>")
+                return
+
+            data = {
+                "id": workspace_id,
+                "name": name,
+                "description": desc,
+                "folders": norm_folders,
+                "memory_file": mem_file,
+            }
+            self.config_manager.save_workspace(workspace_id, data)
+            self._refresh_workspaces_list()
+            win.close()
+
+        save_btn.connect("clicked", _save)
+        win.present()
+
+    # -------------------------------------------------------------
+    # TAB: AGENTES ESPECIALIZADOS (prompt reutilizable en todos los workspaces)
+    # -------------------------------------------------------------
+    def _build_agents_page(self):
+        page = Adw.PreferencesPage()
+        page.set_title("Agentes")
+        page.set_icon_name("system-users-symbolic")
+
+        info_grp = Adw.PreferencesGroup()
+        info_grp.set_title("Agentes Especializados")
+        info_grp.set_description(
+            "Crea agentes con prompts/instrucciones especializados. "
+            "Los agentes son reutilizables y pueden utilizarse en cualquier workspace."
+        )
+
+        header_row = Adw.ActionRow(
+            title="Gestión de Agentes",
+            subtitle="Cada agente define su rol y prompt; el workspace/proyecto se elige al crear el chat."
+        )
+        add_btn = Gtk.Button(label="+ Nuevo Agente")
+        add_btn.add_css_class("suggested-action")
+        add_btn.connect("clicked", lambda _b: self._on_edit_agent(None))
+        header_row.add_suffix(add_btn)
+        info_grp.add(header_row)
+        page.add(info_grp)
+
+        self.agents_list_grp = Adw.PreferencesGroup()
+        self.agents_list_grp.set_title("Agentes Configurados")
+        self.agents_list_grp.set_description("Agentes con prompt especializado disponibles en todos los workspaces.")
+        page.add(self.agents_list_grp)
+
+        self._agents_rows_widgets = []
+        self.add(page)
+        self._refresh_agents_list()
+
+    def _refresh_agents_list(self):
+        if not hasattr(self, "agents_list_grp") or self.agents_list_grp is None:
+            return
+        for w in list(getattr(self, "_agents_rows_widgets", [])):
+            try:
+                self.agents_list_grp.remove(w)
+            except Exception:
+                pass
+        self._agents_rows_widgets = []
+
+        agents = self.config_manager.get_agents() if hasattr(self.config_manager, "get_agents") else {}
+        items = list(agents.values()) if isinstance(agents, dict) else []
+        items = [a for a in items if isinstance(a, dict)]
+        items.sort(key=lambda a: (a.get("name") or a.get("id") or "").lower())
+
+        if not items:
+            empty_row = Adw.ActionRow(
+                title="No hay agentes especializados",
+                subtitle="Pulsa '+ Nuevo Agente' para definir un prompt especializado reutilizable."
+            )
+            self.agents_list_grp.add(empty_row)
+            self._agents_rows_widgets.append(empty_row)
+            return
+
+        for agent in items:
+            aid = agent.get("id", "")
+            name = agent.get("name") or aid or "Agente"
+            desc = agent.get("description") or ""
+            prompt = (agent.get("system_prompt") or "").strip()
+
+            row = Adw.ActionRow()
+            row.set_title(f"<b>{html.escape(name)}</b>")
+            subtitle_parts = []
+            if desc:
+                subtitle_parts.append(html.escape(desc))
+            if prompt:
+                preview = prompt.replace("\n", " ")
+                if len(preview) > 100:
+                    preview = preview[:100].rstrip() + "…"
+                subtitle_parts.append(f"Prompt: {html.escape(preview)}")
+            row.set_subtitle("\n".join(subtitle_parts) if subtitle_parts else "Sin descripción ni prompt configurado")
+            row.set_title_lines(1)
+            row.set_subtitle_lines(3)
+
+            new_chat_btn = Gtk.Button(label="Nuevo chat")
+            new_chat_btn.add_css_class("flat")
+            new_chat_btn.set_tooltip_text("Crear una conversación nueva con este agente (en el workspace activo o general)")
+            new_chat_btn.connect("clicked", lambda _b, a=aid: self._on_create_agent_chat(a))
+            row.add_suffix(new_chat_btn)
+
+            edit_btn = Gtk.Button(icon_name="document-edit-symbolic")
+            edit_btn.add_css_class("flat")
+            edit_btn.set_tooltip_text("Editar agente")
+            edit_btn.connect("clicked", lambda _b, a=dict(agent): self._on_edit_agent(a))
+            row.add_suffix(edit_btn)
+
+            del_btn = Gtk.Button(icon_name="user-trash-symbolic")
+            del_btn.add_css_class("flat")
+            del_btn.set_tooltip_text("Eliminar agente")
+            del_btn.connect("clicked", lambda _b, a=aid, n=name: self._on_delete_agent(a, n))
+            row.add_suffix(del_btn)
+
+            self.agents_list_grp.add(row)
+            self._agents_rows_widgets.append(row)
+
+    def _on_create_agent_chat(self, agent_id: str):
+        """Creates a new thread with the selected agent (reusable in any workspace)."""
+        try:
+            root = self.get_transient_for()
+            if root and hasattr(root, "_on_new_thread"):
+                root._on_new_thread(agent_id=agent_id)
+                root.present()
+                return
+        except Exception:
+            pass
+        dlg = Adw.MessageDialog(
+            transient_for=self,
+            heading="Agente listo",
+            body="El agente está configurado. Usa el botón 'Nuevo chat' y selecciona este agente; puedes usarlo en cualquier workspace."
+        )
+        dlg.add_response("ok", "Entendido")
+        dlg.present()
+
+    def _on_delete_agent(self, agent_id: str, name: str):
+        msg = Adw.MessageDialog(
+            transient_for=self,
+            heading="¿Eliminar agente?",
+            body=f"Se eliminará el agente '{name}'. Las conversaciones existentes conservarán su copia del prompt, pero el agente dejará de estar disponible para nuevos chats."
+        )
+        msg.add_response("cancel", "Cancelar")
+        msg.add_response("delete", "Eliminar")
+        msg.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
+
+        def _resp(_d, resp):
+            if resp == "delete":
+                self.config_manager.delete_agent(agent_id)
+                self._refresh_agents_list()
+        msg.connect("response", _resp)
+        msg.present()
+
+    def _on_edit_agent(self, agent_data):
+        is_new = not (agent_data and agent_data.get("id"))
+        win = Adw.Window()
+        win.set_transient_for(self)
+        win.set_modal(True)
+        win.set_default_size(620, 520)
+        win.set_title("Nuevo Agente Especializado" if is_new else "Editar Agente")
+        if not Adw.StyleManager.get_default().get_dark():
+            win.add_css_class("theme-light")
+
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        win.set_content(main_box)
+
+        header = Adw.HeaderBar()
+        cancel_btn = Gtk.Button(label="Cancelar")
+        cancel_btn.connect("clicked", lambda *_: win.close())
+        header.pack_start(cancel_btn)
+        save_btn = Gtk.Button(label="Guardar")
+        save_btn.add_css_class("suggested-action")
+        header.pack_end(save_btn)
+        main_box.append(header)
+
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scrolled.set_vexpand(True)
+        main_box.append(scrolled)
+
+        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        body.set_margin_top(12); body.set_margin_bottom(16)
+        body.set_margin_start(16); body.set_margin_end(16)
+        scrolled.set_child(body)
+
+        grp = Adw.PreferencesGroup(title="Perfil del Agente (prompt especializado)")
+        name_row = Adw.EntryRow(title="Nombre del agente")
+        name_row.set_text((agent_data or {}).get("name", ""))
+        grp.add(name_row)
+
+        desc_row = Adw.EntryRow(title="Descripción / rol (opcional)")
+        desc_row.set_text((agent_data or {}).get("description", ""))
+        grp.add(desc_row)
+
+        hint = Gtk.Label(
+            label="<small>Los agentes son solo prompts especializados y pueden usarse en cualquier workspace. Las carpetas y memoria de proyecto se configuran en Workspaces.</small>",
+            use_markup=True, xalign=0, wrap=True
+        )
+        hint.add_css_class("dim-label")
+        hint_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        hint_box.set_margin_start(12); hint_box.set_margin_end(12); hint_box.set_margin_bottom(6)
+        hint_box.append(hint)
+        grp.add(hint_box)
+        body.append(grp)
+
+        prompt_grp = Adw.PreferencesGroup(title="Prompt / Instrucciones específicas")
+        prompt_grp.set_description("Define el comportamiento, objetivos y reglas de este agente. Se aplicará como prompt especializado en las conversaciones donde lo uses.")
+        prompt_scroll = Gtk.ScrolledWindow()
+        prompt_scroll.set_min_content_height(200)
+        prompt_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        prompt_view = Gtk.TextView()
+        prompt_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        prompt_view.set_monospace(True)
+        prompt_view.set_top_margin(8); prompt_view.set_bottom_margin(8)
+        prompt_view.set_left_margin(8); prompt_view.set_right_margin(8)
+        prompt_buf = prompt_view.get_buffer()
+        prompt_buf.set_text((agent_data or {}).get("system_prompt", ""))
+        prompt_scroll.set_child(prompt_view)
+        prompt_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        prompt_box.append(prompt_scroll)
+        prompt_row = Adw.ActionRow()
+        prompt_row.set_child(prompt_box)
+        prompt_grp.add(prompt_row)
+        body.append(prompt_grp)
+
+        status_lbl = Gtk.Label(label="", xalign=0, wrap=True)
+        status_lbl.add_css_class("dim-label")
+        body.append(status_lbl)
+
+        def _save(_btn):
+            name = name_row.get_text().strip()
+            desc = desc_row.get_text().strip()
+            start, end = prompt_buf.get_bounds()
+            prompt = prompt_buf.get_text(start, end, True).strip()
+            if not name:
+                status_lbl.set_markup("<span foreground='#f38ba8'>El nombre del agente es obligatorio.</span>")
+                return
+            if not prompt:
+                status_lbl.set_markup("<span foreground='#f38ba8'>Debes proporcionar un prompt/instrucciones para el agente.</span>")
+                return
+            existing_id = (agent_data or {}).get("id")
+            if existing_id:
+                agent_id = existing_id
+            else:
+                import re, uuid
+                agent_id = re.sub(r"[^a-zA-Z0-9_-]+", "-", name.lower()).strip("-")[:40] or f"agent-{uuid.uuid4().hex[:6]}"
+            data = {
+                "id": agent_id,
+                "name": name,
+                "description": desc,
+                "system_prompt": prompt,
+            }
+            self.config_manager.save_agent(agent_id, data)
+            self._refresh_agents_list()
+            win.close()
+
+        save_btn.connect("clicked", _save)
+        win.present()
+
+
     # -------------------------------------------------------------
     # TAB: HEARTBEATS Y AUTOMATIZACIONES
     # -------------------------------------------------------------
@@ -2892,7 +3532,8 @@ class SettingsWindow(Adw.PreferencesWindow):
 
         providers = [
             ("kokoro", "Kokoro TTS / Local (Gratis, Docker localhost:8011)"),
-            ("elevenlabs", "ElevenLabs (Máxima Calidad con Respaldo Automático a Kokoro)")
+            ("elevenlabs", "ElevenLabs (Máxima Calidad con Respaldo Automático)"),
+            ("system", "Sistema Linux / spd-say (Nativo, Sin Docker ni Internet)")
         ]
         provider_keys = [p[0] for p in providers]
         provider_labels = [p[1] for p in providers]

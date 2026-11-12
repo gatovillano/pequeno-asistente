@@ -50,6 +50,8 @@ export default function App() {
   const flatListRef = useRef<FlatList>(null);
   const cancelStreamRef = useRef<(() => void) | null>(null);
   const activeThreadIdRef = useRef<string | null>(null);
+  const isAtBottomRef = useRef(true);
+  const scrollPendingRef = useRef(false);
 
   const selectActiveThread = (id: string | null) => {
     activeThreadIdRef.current = id;
@@ -124,12 +126,41 @@ export default function App() {
     }
   };
 
+  const isNearBottom = (event: any) => {
+    const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
+    return layoutMeasurement.height + contentOffset.y >= contentSize.height - 80;
+  };
+
+  const handleMessagesScroll = (event: any) => {
+    isAtBottomRef.current = isNearBottom(event);
+  };
+
+  const scrollToBottom = (force = false, animated = true) => {
+    if (force) {
+      isAtBottomRef.current = true;
+    }
+    if (!isAtBottomRef.current || scrollPendingRef.current) return;
+    scrollPendingRef.current = true;
+    requestAnimationFrame(() => {
+      scrollPendingRef.current = false;
+      if (isAtBottomRef.current) {
+        flatListRef.current?.scrollToEnd({ animated });
+      }
+    });
+  };
+
+  const handleMessagesContentSizeChange = () => {
+    if (isAtBottomRef.current) {
+      scrollToBottom(false, false);
+    }
+  };
+
   const loadThreadMessages = async (cfg: ConnectionConfig, threadId: string) => {
     try {
       const history = await fetchThreadHistory(cfg.url, cfg.apiKey, threadId);
       setMessages(history);
       setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: false });
+        scrollToBottom(true, false);
       }, 100);
     } catch (err: any) {
       Alert.alert('Error', 'No se pudo cargar el historial: ' + err.message);
@@ -201,7 +232,7 @@ export default function App() {
     setIsStreaming(true);
 
     setTimeout(() => {
-      flatListRef.current?.scrollToEnd({ animated: true });
+      scrollToBottom(true, true);
     }, 50);
 
     const currentThreadId = activeThreadIdRef.current;
@@ -219,7 +250,7 @@ export default function App() {
                 : msg
             )
           );
-          flatListRef.current?.scrollToEnd({ animated: true });
+          scrollToBottom();
         },
         onThinking: (chunk) => {
           setMessages((prev) =>
@@ -286,6 +317,15 @@ export default function App() {
             selectActiveThread(finalId);
           }
           refreshThreads(config, finalId, false);
+        },
+        onTitleUpdated: (newTitle, targetThreadId) => {
+          if (newTitle) {
+            setThreads((prev) =>
+              prev.map((th) =>
+                th.id === targetThreadId ? { ...th, title: newTitle } : th
+              )
+            );
+          }
         },
         onError: (err) => {
           setMessages((prev) =>
@@ -424,6 +464,9 @@ export default function App() {
             keyExtractor={(item) => item.id}
             renderItem={({ item }) => <MessageItem message={item} />}
             contentContainerStyle={styles.messagesList}
+            onScroll={handleMessagesScroll}
+            onContentSizeChange={handleMessagesContentSizeChange}
+            scrollEventThrottle={16}
             ListEmptyComponent={
               <View style={styles.emptyContainer}>
                 <Text style={styles.emptyLogo}>🤖</Text>

@@ -299,6 +299,56 @@ async def fetch_provider_models(
                 except Exception as e:
                     error_msg = f"Error consultando Antigravity: {e}"
 
+            # 11. VERCEL AI GATEWAY
+            elif provider == "vercel":
+                headers = {}
+                if api_key:
+                    headers["Authorization"] = f"Bearer {api_key}"
+                resp = await client.get("https://ai-gateway.vercel.sh/v1/models", headers=headers)
+                if resp.status_code == 200:
+                    data = resp.json().get("data", [])
+                    for m in data:
+                        m_type = m.get("type", "")
+                        # Include language/chat models, ignore embedding/audio-only/eval
+                        if m_type and m_type != "language":
+                            continue
+                        mid = m.get("id", "")
+                        if not mid:
+                            continue
+                        name = m.get("name", mid)
+                        ctx = m.get("context_window", 0)
+                        ctx_str = f"{int(ctx/1024)}k ctx" if ctx else ""
+
+                        pricing = m.get("pricing", {})
+                        price_str = ""
+                        if pricing and isinstance(pricing, dict):
+                            try:
+                                p_in = float(pricing.get("input", 0)) * 1_000_000
+                                p_out = float(pricing.get("output", 0)) * 1_000_000
+                                if p_in == 0 and p_out == 0:
+                                    price_str = "Gratis"
+                                else:
+                                    price_str = f"${p_in:.2f}/M in, ${p_out:.2f}/M out"
+                            except (ValueError, TypeError):
+                                pass
+
+                        desc_parts = [p for p in [ctx_str, price_str] if p]
+                        desc = " • ".join(desc_parts) or m.get("description", "Vercel AI Gateway")
+
+                        models.append({
+                            "id": f"vercel/{mid}",
+                            "raw_id": mid,
+                            "name": name,
+                            "provider": "vercel",
+                            "description": desc,
+                            "context_length": ctx
+                        })
+                    models.sort(key=lambda x: x["name"].lower())
+                elif resp.status_code in (401, 403) and api_key:
+                    error_msg = f"Clave de Vercel AI Gateway no válida (HTTP {resp.status_code})"
+                else:
+                    error_msg = f"HTTP {resp.status_code} desde Vercel AI Gateway: {resp.text[:120]}"
+
     except Exception as e:
         error_msg = f"Excepción de conexión ({provider}): {str(e)}"
         logger.warning(error_msg)
@@ -403,6 +453,16 @@ async def validate_api_key(provider: str, api_key: str, base_url: str = "") -> T
                 if resp.status_code == 200:
                     return True, f"Clave válida de {provider.capitalize()} (Conexión exitosa)"
                 return False, f"Error {resp.status_code}: Credenciales rechazadas"
+
+            elif provider in ("vercel", "vercel_ai_gateway"):
+                headers = {"Authorization": f"Bearer {api_key}"}
+                resp = await client.get("https://ai-gateway.vercel.sh/v1/models", headers=headers)
+                if resp.status_code == 200:
+                    count = len(resp.json().get("data", []))
+                    return True, f"Clave válida de Vercel AI Gateway ({count} modelos disponibles)"
+                elif resp.status_code in (401, 403):
+                    return False, f"Error {resp.status_code}: Clave de Vercel AI Gateway rechazada"
+                return False, f"Error {resp.status_code} desde Vercel AI Gateway: {resp.text[:120]}"
 
             return True, "Clave guardada (Validación no disponible para este proveedor)"
 

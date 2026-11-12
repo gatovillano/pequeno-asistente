@@ -199,6 +199,40 @@ export async function deleteThread(
   return res.ok;
 }
 
+export async function updateThreadTitle(
+  url: string,
+  apiKey: string,
+  threadId: string,
+  title: string
+): Promise<{ success: boolean; title: string }> {
+  const cleanUrl = normalizeUrl(url);
+  const res = await fetch(`${cleanUrl}/api/threads/${threadId}/title`, {
+    method: 'PUT',
+    headers: getHeaders(apiKey),
+    body: JSON.stringify({ title }),
+  });
+  if (!res.ok) {
+    throw new Error(`Error actualizando título del hilo: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function autoGenerateThreadTitle(
+  url: string,
+  apiKey: string,
+  threadId: string
+): Promise<{ thread_id: string; title: string; generated: boolean }> {
+  const cleanUrl = normalizeUrl(url);
+  const res = await fetch(`${cleanUrl}/api/threads/${threadId}/auto-title`, {
+    method: 'POST',
+    headers: getHeaders(apiKey),
+  });
+  if (!res.ok) {
+    throw new Error(`Error generando título del hilo: ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function abortTurn(
   url: string,
   apiKey: string,
@@ -312,6 +346,11 @@ export function sendStreamingMessage(
               break;
             case 'complete':
               callbacks.onComplete(payload.content || '', payload.thread_id || threadId || '');
+              break;
+            case 'thread_title_updated':
+              if (callbacks.onTitleUpdated) {
+                callbacks.onTitleUpdated(payload.title || '', payload.thread_id || threadId || '');
+              }
               break;
             case 'error':
               callbacks.onError(payload.error || 'Error desconocido');

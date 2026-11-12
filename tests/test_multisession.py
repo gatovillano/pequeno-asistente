@@ -158,7 +158,7 @@ class TestMultiSession(unittest.TestCase):
                 self.assertTrue(self.agent.is_any_running())
 
                 # Wait for both to finish
-                await asyncio.gather(task_a, task_b)
+                await asyncio.gather(task_a, task_b, return_exceptions=True)
 
             # Verify no sessions running
             self.assertEqual(self.agent.get_running_thread_ids(), [])
@@ -228,7 +228,7 @@ class TestMultiSession(unittest.TestCase):
                 # Abort session A ONLY
                 self.agent.abort(thread_id=tid_a)
 
-                await asyncio.gather(task_a, task_b)
+                await asyncio.gather(task_a, task_b, return_exceptions=True)
 
             # Session A was canceled with an error notice
             self.assertTrue(len(errors_a) > 0)
