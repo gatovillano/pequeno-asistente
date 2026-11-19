@@ -3518,6 +3518,240 @@ class SettingsWindow(Adw.PreferencesWindow):
         page.add(whisper_grp)
 
         # -------------------------------------------------------------
+        # SECCIÓN 1.5: ACTIVACIÓN POR VOZ (WAKE WORD - VOSK)
+        # -------------------------------------------------------------
+        wake_grp = Adw.PreferencesGroup()
+        wake_grp.set_title("Activación por Voz (Wake Word)")
+        wake_grp.set_description(
+            "Escucha en segundo plano con Vosk (bajo consumo, 100% local) para abrir la ventana "
+            "automáticamente al decir la frase de activación."
+        )
+
+        wake_enable_row = Adw.SwitchRow(
+            title="Activar con palabra clave",
+            subtitle="Abre y enfoca la ventana cuando digas la frase configurada"
+        )
+        wake_enable_row.set_active(audio_cfg.get("wake_word_enabled", False))
+
+        def _on_wake_toggled(row, _param):
+            self.config_manager.get_audio_config()["wake_word_enabled"] = row.get_active()
+            self.config_manager.save()
+            self.on_audio_changed()
+
+        wake_enable_row.connect("notify::active", _on_wake_toggled)
+        wake_grp.add(wake_enable_row)
+
+        wake_phrase_row = Adw.EntryRow(title="Frase de activación")
+        wake_phrase_row.set_text(audio_cfg.get("wake_word_phrase", "okay asistente"))
+        save_wake_btn = Gtk.Button(label="Guardar")
+        save_wake_btn.add_css_class("suggested-action")
+        save_wake_btn.set_valign(Gtk.Align.CENTER)
+
+        def _on_save_wake_phrase(_btn):
+            phrase = wake_phrase_row.get_text().strip() or "okay asistente"
+            wake_phrase_row.set_text(phrase)
+            self.config_manager.get_audio_config()["wake_word_phrase"] = phrase
+            self.config_manager.save()
+            self.on_audio_changed()
+            save_wake_btn.set_label("✓ Guardado")
+            GLib.timeout_add(1500, lambda: (save_wake_btn.set_label("Guardar"), False)[1])
+
+        save_wake_btn.connect("clicked", _on_save_wake_phrase)
+        wake_phrase_row.add_suffix(save_wake_btn)
+        wake_grp.add(wake_phrase_row)
+
+        # Acoustic neural-embedding enrollment (no transcription)
+        from pequeno_asistente.audio.acoustic_wake import AcousticWakeMatcher, record_pcm_clip
+        acoustic_matcher = AcousticWakeMatcher()
+
+        def _acoustic_subtitle() -> str:
+            counts = acoustic_matcher.template_counts()
+            return (
+                f"Muestras — OK Asistente: {counts.get('wake', 0)} | "
+                f"Ocultar: {counts.get('ocultar ventana', 0)} | "
+                f"Nuevo chat: {counts.get('nuevo chat', 0)}"
+            )
+
+        acoustic_row = Adw.ActionRow(
+            title="Entrenamiento acústico directo (sin transcripción)",
+            subtitle=_acoustic_subtitle(),
+        )
+
+        def _enroll_label(label: str, btn: Gtk.Button, default_text: str):
+            btn.set_sensitive(False)
+            btn.set_label("Grabando (2.5s)...")
+
+            def _worker():
+                try:
+                    pcm = record_pcm_clip(duration_seconds=2.5)
+                    count = acoustic_matcher.enroll_pcm(label, pcm)
+                    def _done():
+                        acoustic_row.set_subtitle(_acoustic_subtitle())
+                        btn.set_label(f"✓ ({count})")
+                        btn.set_sensitive(True)
+                        self.on_audio_changed()
+                        GLib.timeout_add(1500, lambda: (btn.set_label(default_text), False)[1])
+                        return False
+                    GLib.idle_add(_done)
+                except Exception as e:
+                    def _err():
+                        acoustic_row.set_subtitle(f"Error: {e}")
+                        btn.set_label(default_text)
+                        btn.set_sensitive(True)
+                        return False
+                    GLib.idle_add(_err)
+
+            threading.Thread(target=_worker, daemon=True).start()
+
+        btn_enroll_wake = Gtk.Button(label="Grabar OK Asistente")
+        btn_enroll_wake.set_valign(Gtk.Align.CENTER)
+        btn_enroll_wake.add_css_class("suggested-action")
+        btn_enroll_wake.connect("clicked", lambda b: _enroll_label("wake", b, "Grabar OK Asistente"))
+
+        btn_enroll_hide = Gtk.Button(label="Grabar Ocultar")
+        btn_enroll_hide.set_valign(Gtk.Align.CENTER)
+        btn_enroll_hide.connect("clicked", lambda b: _enroll_label("ocultar ventana", b, "Grabar Ocultar"))
+
+        btn_enroll_new_chat = Gtk.Button(label="Grabar Nuevo chat")
+        btn_enroll_new_chat.set_valign(Gtk.Align.CENTER)
+        btn_enroll_new_chat.connect("clicked", lambda b: _enroll_label("nuevo chat", b, "Grabar Nuevo chat"))
+
+        btn_clear_acoustic = Gtk.Button(label="Borrar")
+        btn_clear_acoustic.set_valign(Gtk.Align.CENTER)
+        btn_clear_acoustic.add_css_class("destructive-action")
+
+        def _on_clear_acoustic(_b):
+            acoustic_matcher.clear_templates()
+            acoustic_row.set_subtitle(_acoustic_subtitle())
+            self.on_audio_changed()
+
+        btn_clear_acoustic.connect("clicked", _on_clear_acoustic)
+        acoustic_row.add_suffix(btn_enroll_wake)
+        acoustic_row.add_suffix(btn_enroll_hide)
+        acoustic_row.add_suffix(btn_enroll_new_chat)
+        acoustic_row.add_suffix(btn_clear_acoustic)
+        wake_grp.add(acoustic_row)
+
+        page.add(wake_grp)
+
+        # -------------------------------------------------------------
+        # SECCIÓN 1B: COMANDOS DE VOZ PERSONALIZADOS (SIN TRANSCRIPCIÓN)
+        # -------------------------------------------------------------
+        custom_cmd_grp = Adw.PreferencesGroup()
+        custom_cmd_grp.set_title("Comandos de voz personalizados (sin transcripción)")
+        custom_cmd_grp.set_description(
+            "Crea comandos grabados con tu voz para ejecutar apps, scripts o mensajes fijos directamente al decirlos."
+        )
+
+        cmd_name_row = Adw.EntryRow(title="Nombre del comando (ej. abre firefox)")
+        cmd_type_row = Adw.ComboRow(title="Tipo de acción")
+        cmd_type_model = Gtk.StringList.new(["Ejecutar comando / app", "Enviar mensaje al agente"])
+        cmd_type_row.set_model(cmd_type_model)
+        cmd_val_row = Adw.EntryRow(title="Comando o mensaje a ejecutar")
+
+        add_cmd_btn = Gtk.Button(label="Añadir comando")
+        add_cmd_btn.add_css_class("suggested-action")
+        add_cmd_btn.set_valign(Gtk.Align.CENTER)
+        cmd_val_row.add_suffix(add_cmd_btn)
+
+        custom_cmd_grp.add(cmd_name_row)
+        custom_cmd_grp.add(cmd_type_row)
+        custom_cmd_grp.add(cmd_val_row)
+
+        custom_cmd_rows: list = []
+
+        def _refresh_custom_cmd_rows():
+            for r in custom_cmd_rows:
+                custom_cmd_grp.remove(r)
+            custom_cmd_rows.clear()
+            counts = acoustic_matcher.load_templates()
+            entries = list(self.config_manager.get_audio_config().get("custom_voice_commands", []))
+            for idx, entry in enumerate(entries):
+                cname = (entry.get("name") or "").lower().strip()
+                atype = entry.get("action_type", "shell")
+                aval = entry.get("action_value", "")
+                if not cname:
+                    continue
+                tipo_lbl = "App/Shell" if atype == "shell" else "Mensaje"
+                sample_cnt = counts.get(cname, 0)
+                row = Adw.ActionRow(
+                    title=cname,
+                    subtitle=f"{tipo_lbl}: {aval} • Muestras grabadas: {sample_cnt}",
+                )
+
+                rec_btn = Gtk.Button(label="Grabar (2.5s)")
+                rec_btn.set_valign(Gtk.Align.CENTER)
+                rec_btn.add_css_class("suggested-action")
+
+                def _on_rec_custom(b, label=cname, r=row, t_lbl=tipo_lbl, val=aval):
+                    b.set_sensitive(False)
+                    b.set_label("Grabando...")
+
+                    def _worker():
+                        try:
+                            pcm = record_pcm_clip(duration_seconds=2.5)
+                            cnt = acoustic_matcher.enroll_pcm(label, pcm)
+                            def _done():
+                                r.set_subtitle(f"{t_lbl}: {val} • Muestras grabadas: {cnt}")
+                                b.set_label(f"✓ ({cnt})")
+                                b.set_sensitive(True)
+                                self.on_audio_changed()
+                                GLib.timeout_add(1500, lambda: (b.set_label("Grabar (2.5s)"), False)[1])
+                                return False
+                            GLib.idle_add(_done)
+                        except Exception as e:
+                            def _err():
+                                r.set_subtitle(f"Error: {e}")
+                                b.set_label("Grabar (2.5s)")
+                                b.set_sensitive(True)
+                                return False
+                            GLib.idle_add(_err)
+
+                    threading.Thread(target=_worker, daemon=True).start()
+
+                rec_btn.connect("clicked", _on_rec_custom)
+
+                del_btn = Gtk.Button(label="Eliminar")
+                del_btn.set_valign(Gtk.Align.CENTER)
+                del_btn.add_css_class("destructive-action")
+
+                def _on_del_custom(_b, remove_idx=idx, label=cname):
+                    cur = list(self.config_manager.get_audio_config().get("custom_voice_commands", []))
+                    if 0 <= remove_idx < len(cur):
+                        cur.pop(remove_idx)
+                        self.config_manager.get_audio_config()["custom_voice_commands"] = cur
+                        self.config_manager.save()
+                    acoustic_matcher.clear_templates(label)
+                    self.on_audio_changed()
+                    _refresh_custom_cmd_rows()
+
+                del_btn.connect("clicked", _on_del_custom)
+                row.add_suffix(rec_btn)
+                row.add_suffix(del_btn)
+                custom_cmd_grp.add(row)
+                custom_cmd_rows.append(row)
+
+        def _on_add_custom_cmd(_btn):
+            name = " ".join(cmd_name_row.get_text().lower().strip().split())
+            val = cmd_val_row.get_text().strip()
+            if not name or not val:
+                return
+            atype = "prompt" if cmd_type_row.get_selected() == 1 else "shell"
+            cur = list(self.config_manager.get_audio_config().get("custom_voice_commands", []))
+            cur = [c for c in cur if (c.get("name") or "").lower().strip() != name]
+            cur.append({"name": name, "action_type": atype, "action_value": val})
+            self.config_manager.get_audio_config()["custom_voice_commands"] = cur
+            self.config_manager.save()
+            cmd_name_row.set_text("")
+            cmd_val_row.set_text("")
+            self.on_audio_changed()
+            _refresh_custom_cmd_rows()
+
+        add_cmd_btn.connect("clicked", _on_add_custom_cmd)
+        _refresh_custom_cmd_rows()
+        page.add(custom_cmd_grp)
+
+        # -------------------------------------------------------------
         # SECCIÓN 2: PROVEEDOR PRINCIPAL DE VOZ (TTS)
         # -------------------------------------------------------------
         tts_provider_grp = Adw.PreferencesGroup()

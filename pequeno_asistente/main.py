@@ -19,7 +19,13 @@ from pequeno_asistente.agent.memory import MemoryManager
 from pequeno_asistente.agent.thread_manager import ThreadManager
 from pequeno_asistente.mcp_client.manager import MCPManager
 from pequeno_asistente.agent.core import AgentCore
-from pequeno_asistente.ui.tray import send_toggle_command, send_new_thread_command, send_quit_command, ToggleSocketServer
+from pequeno_asistente.ui.tray import (
+    send_toggle_command,
+    send_new_thread_command,
+    send_quit_command,
+    ToggleSocketServer,
+    StatusNotifierTray,
+)
 
 # Setup real-time file + broadcaster + stderr logging
 setup_realtime_logging(level=logging.INFO)
@@ -51,6 +57,12 @@ def main():
     if "--new-thread" in sys.argv or "-n" in sys.argv or "--new" in sys.argv:
         if send_new_thread_command():
             sys.exit(0)
+
+    # Handle --cli / -c command line arguments to run full CLI version
+    if "--cli" in sys.argv or "-c" in sys.argv:
+        from pequeno_asistente.cli.app import main as cli_main
+        cli_args = [a for a in sys.argv[1:] if a not in ("--cli", "-c")]
+        sys.exit(cli_main(cli_args))
 
     # Handle --server / -s command line arguments to run headless FastAPI server
     if "--server" in sys.argv or "-s" in sys.argv:
@@ -105,6 +117,7 @@ def main():
     # 4. Create GTK Application
     app = Adw.Application(application_id="com.gatovillano.pequenoasistente")
     main_window = None
+    tray_icon = None
 
     def on_activate(application):
         nonlocal main_window
@@ -119,17 +132,21 @@ def main():
                 thread_manager=thread_manager,
                 async_loop=async_loop
             )
+            main_window.tray_icon = tray_icon
+        main_window.unminimize()
+        main_window.set_visible(True)
         main_window.present()
 
     app.connect("activate", on_activate)
 
-    # 5. Socket IPC for instant toggling from Waybar, Hyprland or GNOME Shell
+    # 5. Socket IPC & Native StatusNotifierItem Tray Icon
     def handle_toggle():
         if main_window:
             main_window.toggle_window()
 
     def handle_show():
         if main_window:
+            main_window.unminimize()
             main_window.set_visible(True)
             main_window.present()
 
@@ -139,6 +156,7 @@ def main():
 
     def handle_settings():
         if main_window:
+            main_window.unminimize()
             main_window.set_visible(True)
             main_window.present()
             main_window._on_open_settings(None)
@@ -149,6 +167,7 @@ def main():
 
     def handle_new_thread():
         if main_window:
+            main_window.unminimize()
             main_window.set_visible(True)
             main_window.present()
             main_window._on_new_thread()
@@ -158,6 +177,14 @@ def main():
             main_window.quit_app()
         else:
             app.quit()
+
+    tray_icon = StatusNotifierTray(
+        on_toggle=handle_toggle,
+        on_new_thread=handle_new_thread,
+        on_settings=handle_settings,
+        on_quit=handle_quit,
+    )
+    tray_icon.start()
 
     socket_server = ToggleSocketServer(
         on_toggle=handle_toggle,
@@ -173,6 +200,7 @@ def main():
     # 6. Cleanup on exit
     def cleanup():
         logger.info("Shutting down Pequeño Asistente...")
+        tray_icon.stop()
         socket_server.stop()
         # Shutdown MCPs
         try:

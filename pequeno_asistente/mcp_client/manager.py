@@ -278,9 +278,10 @@ def extract_servers_from_json(text: str) -> List[Tuple[str, Dict[str, Any]]]:
 
 
 class MCPServerInstance:
-    def __init__(self, server_id: str, config: Dict[str, Any]):
+    def __init__(self, server_id: str, config: Dict[str, Any], quiet_stderr: bool = False):
         self.server_id = server_id
         self.config = config
+        self.quiet_stderr = quiet_stderr
         self.exit_stack: Optional[AsyncExitStack] = None
         self.session: Optional[ClientSession] = None
         self.tools: List[Any] = []
@@ -385,7 +386,18 @@ class MCPServerInstance:
                     raise ValueError(f"No command specified for stdio server {self.server_id}")
 
                 params = StdioServerParameters(command=cmd, args=args, env=env)
-                read_stream, write_stream = await self.exit_stack.enter_async_context(stdio_client(params))
+                if self.quiet_stderr:
+                    try:
+                        log_path = Path.home() / ".config" / "pequeno-asistente" / "mcp_servers.log"
+                        log_path.parent.mkdir(parents=True, exist_ok=True)
+                        errlog_file = self.exit_stack.enter_context(open(log_path, "a", encoding="utf-8", buffering=1))
+                    except Exception:
+                        errlog_file = self.exit_stack.enter_context(open(os.devnull, "w", encoding="utf-8"))
+                    read_stream, write_stream = await self.exit_stack.enter_async_context(
+                        stdio_client(params, errlog=errlog_file)
+                    )
+                else:
+                    read_stream, write_stream = await self.exit_stack.enter_async_context(stdio_client(params))
                 self.session = await self.exit_stack.enter_async_context(ClientSession(read_stream, write_stream))
                 self.tools = await self._initialize_and_list_tools(self.session, timeout=timeout)
                 self.active_transport = "stdio"
@@ -537,9 +549,15 @@ class DefaultMCPServerInstance(MCPServerInstance):
 
 
 class MCPManager:
-    def __init__(self, config_manager=None, registry_client: Optional[RegistryClient] = None):
+    def __init__(
+        self,
+        config_manager=None,
+        registry_client: Optional[RegistryClient] = None,
+        quiet_stderr: bool = False,
+    ):
         self.config_manager = config_manager
         self.registry_client = registry_client or RegistryClient()
+        self.quiet_stderr = quiet_stderr
         self.instances: Dict[str, MCPServerInstance] = {}
         self.tool_map: Dict[str, Tuple[str, str]] = {}  # namespaced_name -> (server_id, tool_name)
         self.alias_map: Dict[str, str] = {}  # alias -> namespaced_name
@@ -624,7 +642,7 @@ class MCPManager:
                 if force or not instance or instance.status not in ("connected", "connecting"):
                     if instance:
                         await instance.disconnect()
-                    new_inst = MCPServerInstance(server_id, cfg)
+                    new_inst = MCPServerInstance(server_id, cfg, quiet_stderr=self.quiet_stderr)
                     self.instances[server_id] = new_inst
                     tasks.append(_connect_worker(new_inst))
 

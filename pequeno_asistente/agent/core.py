@@ -36,6 +36,16 @@ litellm.telemetry = False
 litellm.set_verbose = False
 litellm.suppress_debug_info = True
 
+# LiteLLM attaches its own stderr StreamHandler to these loggers at import time;
+# remove it so logs route cleanly through the root logger configuration (and
+# stay out of CLI stderr unless --verbose is enabled).
+for _litellm_logger_name in ("LiteLLM", "LiteLLM Router", "LiteLLM Proxy", "LiteLLM Proxy.stdout"):
+    _litellm_logger = logging.getLogger(_litellm_logger_name)
+    _litellm_logger.setLevel(logging.WARNING)
+    for _h in list(_litellm_logger.handlers):
+        if isinstance(_h, logging.StreamHandler) and not isinstance(_h, logging.FileHandler):
+            _litellm_logger.removeHandler(_h)
+
 logger = logging.getLogger("pequeno_asistente.agent")
 
 BASE_SYSTEM_PROMPT = """Eres Pequeño Asistente, un agente de escritorio ligero, inteligente y proactivo para Linux (verifica qué escritorio).

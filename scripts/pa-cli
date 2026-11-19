@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Wrapper script to launch Pequeño Asistente CLI using the project's virtual environment.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(dirname "$SCRIPT_DIR")"
+
+PYTHON_BIN="python3"
+if [ -x "$REPO_DIR/.venv/bin/python3" ]; then
+    PYTHON_BIN="$REPO_DIR/.venv/bin/python3"
+elif [ -x "$REPO_DIR/pequeno_asistente/venv/bin/python3" ]; then
+    PYTHON_BIN="$REPO_DIR/pequeno_asistente/venv/bin/python3"
+fi
+
+export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"
+exec "$PYTHON_BIN" -m pequeno_asistente.cli "$@"

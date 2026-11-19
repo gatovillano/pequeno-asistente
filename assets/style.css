@@ -2298,6 +2298,53 @@ popover.menu-popover.theme-light contents {
     background-color: rgba(220, 38, 38, 0.14);
 }
 
+/* Voice command & wake-word feedback indicator banner */
+.voice-feedback-banner {
+    border-radius: 10px;
+    padding: 5px 10px;
+    margin: 2px 4px 4px 4px;
+    font-size: 12px;
+    font-weight: 600;
+    transition: all 180ms ease;
+}
+
+.voice-feedback-listening {
+    background-color: rgba(243, 139, 168, 0.16);
+    border: 1px solid rgba(243, 139, 168, 0.45);
+    color: #f38ba8;
+}
+
+.voice-feedback-processing {
+    background-color: rgba(137, 180, 250, 0.16);
+    border: 1px solid rgba(137, 180, 250, 0.45);
+    color: #89b4fa;
+}
+
+.voice-feedback-confirmed {
+    background-color: rgba(166, 227, 161, 0.16);
+    border: 1px solid rgba(166, 227, 161, 0.45);
+    color: #a6e3a1;
+}
+
+.theme-light .voice-feedback-listening {
+    background-color: rgba(220, 38, 38, 0.10);
+    border: 1px solid rgba(220, 38, 38, 0.35);
+    color: #b91c1c;
+}
+
+.theme-light .voice-feedback-processing {
+    background-color: rgba(37, 99, 235, 0.10);
+    border: 1px solid rgba(37, 99, 235, 0.35);
+    color: #1d4ed8;
+}
+
+.theme-light .voice-feedback-confirmed {
+    background-color: rgba(22, 163, 74, 0.10);
+    border: 1px solid rgba(22, 163, 74, 0.35);
+    color: #15803d;
+}
+
+
 
 
 

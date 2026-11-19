@@ -3,6 +3,8 @@ Audio recording and transcription engine using faster-whisper.
 Designed for Linux (Wayland, Hyprland, GNOME) supporting pw-record, ffmpeg, and arecord.
 """
 import os
+import wave
+import array
 import signal
 import shutil
 import logging
@@ -33,17 +35,26 @@ class AudioTranscriber:
     _cached_model_key = None
     _model_lock = threading.Lock()
 
+    DEFAULT_ES_PROMPT = (
+        "Okay asistente. Comandos de voz en español: nuevo chat, abrir configuración, "
+        "ocultar ventana, abrir archivos."
+    )
+
     def __init__(
         self,
-        model_size: str = "tiny",
-        device: str = "cpu",
-        compute_type: str = "int8",
-        language: Optional[str] = None
+        model_size: str = "small",
+        device: str = "cuda",
+        compute_type: str = "float16",
+        language: Optional[str] = "es",
+        beam_size: int = 5,
+        initial_prompt: Optional[str] = None,
     ):
         self.model_size = model_size
         self.device = device
         self.compute_type = compute_type
         self.language = language
+        self.beam_size = beam_size
+        self.initial_prompt = initial_prompt
 
         self._process: Optional[subprocess.Popen] = None
         self._current_wav_path: Optional[str] = None
@@ -160,35 +171,99 @@ class AudioTranscriber:
         return None
 
     def _get_whisper_model(self):
-        """Loads and caches the faster-whisper WhisperModel instance."""
+        """Loads and caches the faster-whisper WhisperModel instance with CPU fallback."""
         model_key = f"{self.model_size}:{self.device}:{self.compute_type}"
         with self._model_lock:
             if AudioTranscriber._cached_model is not None and AudioTranscriber._cached_model_key == model_key:
                 return AudioTranscriber._cached_model
 
-            logger.info(f"Loading faster-whisper model '{self.model_size}' (device={self.device}, compute_type={self.compute_type})...")
             from faster_whisper import WhisperModel
-            model = WhisperModel(
-                self.model_size,
-                device=self.device,
-                compute_type=self.compute_type,
-                cpu_threads=2
-            )
+            try:
+                logger.info(
+                    f"Loading faster-whisper model '{self.model_size}' "
+                    f"(device={self.device}, compute_type={self.compute_type})..."
+                )
+                model = WhisperModel(
+                    self.model_size,
+                    device=self.device,
+                    compute_type=self.compute_type,
+                    cpu_threads=4
+                )
+            except Exception as e:
+                if self.device != "cpu":
+                    logger.warning(
+                        f"Failed to load faster-whisper on device='{self.device}' ({e}); "
+                        "falling back to device='cpu', compute_type='int8'."
+                    )
+                    fallback_key = f"{self.model_size}:cpu:int8"
+                    if AudioTranscriber._cached_model is not None and AudioTranscriber._cached_model_key == fallback_key:
+                        return AudioTranscriber._cached_model
+                    model = WhisperModel(
+                        self.model_size,
+                        device="cpu",
+                        compute_type="int8",
+                        cpu_threads=4
+                    )
+                    model_key = fallback_key
+                else:
+                    raise
+
             AudioTranscriber._cached_model = model
             AudioTranscriber._cached_model_key = model_key
             logger.info("faster-whisper model loaded successfully.")
             return model
 
+    @staticmethod
+    def _normalize_wav_in_place(wav_path: str, target_peak: int = 24000) -> None:
+        """Normalizes quiet 16-bit PCM WAV files in place to improve Whisper accuracy."""
+        try:
+            with wave.open(wav_path, "rb") as rf:
+                params = rf.getparams()
+                if params.sampwidth != 2 or params.nchannels != 1:
+                    return
+                frames = rf.readframes(params.nframes)
+            if not frames:
+                return
+            samples = array.array("h")
+            samples.frombytes(frames)
+            peak = max((abs(s) for s in samples), default=0)
+            # Boost only quiet recordings (avoid amplifying pure silence/noise)
+            if 300 < peak < 16000:
+                gain = min(target_peak / peak, 8.0)
+                for i in range(len(samples)):
+                    val = int(samples[i] * gain)
+                    if val > 32767:
+                        val = 32767
+                    elif val < -32768:
+                        val = -32768
+                    samples[i] = val
+                with wave.open(wav_path, "wb") as wf:
+                    wf.setparams(params)
+                    wf.writeframes(samples.tobytes())
+        except Exception as e:
+            logger.debug(f"Skipping WAV normalization: {e}")
+
     def transcribe_file(self, wav_path: str) -> str:
         """Transcribes a WAV file into text using faster-whisper and removes the temporary file."""
         try:
+            self._normalize_wav_in_place(wav_path)
             model = self._get_whisper_model()
             kwargs: Dict[str, Any] = {
-                "beam_size": 1,
+                "beam_size": self.beam_size,
                 "vad_filter": True,
+                "vad_parameters": {
+                    "min_silence_duration_ms": 400,
+                    "speech_pad_ms": 250,
+                },
+                "condition_on_previous_text": False,
             }
             if self.language:
                 kwargs["language"] = self.language
+            prompt = self.initial_prompt
+            if prompt is None and self.language == "es":
+                prompt = self.DEFAULT_ES_PROMPT
+            if prompt:
+                kwargs["initial_prompt"] = prompt
 
             segments, info = model.transcribe(wav_path, **kwargs)
             transcript_parts = []

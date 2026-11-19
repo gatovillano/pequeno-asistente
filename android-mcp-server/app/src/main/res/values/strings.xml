@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Pequeño Asistente E-Ink</string>
+    <string name="accessibility_description">Permite a Pequeño Asistente E-Ink leer la interfaz en pantalla y ejecutar toques, escritura y gestos de navegación.</string>
+</resources>

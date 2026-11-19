@@ -59,11 +59,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "inject_memory": True
     },
     "audio": {
-        "whisper_model": "tiny",
-        "language": None,
-        "device": "cpu",
-        "compute_type": "int8",
+        "whisper_model": "small",
+        "language": "es",
+        "device": "cuda",
+        "compute_type": "float16",
         "auto_send_on_voice": True,
+        "wake_word_enabled": False,
+        "wake_word_phrase": "okay asistente",
+        "custom_voice_commands": [],
         "tts_provider": "kokoro",
         "kokoro": {
             "enabled": True,

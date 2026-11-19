@@ -6,7 +6,9 @@ Supports multi-thread persistent conversations with sliding sidebar and instant 
 import os
 import re
 import html
+import uuid
 import asyncio
+import datetime
 import threading
 import logging
 from pathlib import Path
@@ -31,6 +33,7 @@ from pequeno_asistente.agent.thread_manager import ThreadManager, format_relativ
 from pequeno_asistente.audio.transcriber import AudioTranscriber
 from pequeno_asistente.audio.tts import KokoroTTS, UnifiedTTS
 from pequeno_asistente.audio.call_engine import CallEngine
+from pequeno_asistente.audio.wake_word import WakeWordDetector, normalize_command_text, strip_wake_prefix
 from pequeno_asistente.ui.chat_view import ChatView, set_chat_theme
 from pequeno_asistente.ui.call_view import CallView
 from pequeno_asistente.ui.terminal_view import TerminalView
@@ -202,10 +205,10 @@ class MainWindow(Adw.ApplicationWindow):
         # Initialize audio transcriber (faster-whisper)
         audio_cfg = self.config_manager.get_audio_config()
         self.transcriber = AudioTranscriber(
-            model_size=audio_cfg.get("whisper_model", "tiny"),
-            device=audio_cfg.get("device", "cpu"),
-            compute_type=audio_cfg.get("compute_type", "int8"),
-            language=audio_cfg.get("language")
+            model_size=audio_cfg.get("whisper_model", "small"),
+            device=audio_cfg.get("device", "cuda"),
+            compute_type=audio_cfg.get("compute_type", "float16"),
+            language=audio_cfg.get("language", "es")
         )
 
         # Initialize Unified TTS (Kokoro & ElevenLabs with automatic fallback)
@@ -229,7 +232,12 @@ class MainWindow(Adw.ApplicationWindow):
         self.active_speaking_bubble = None
         self._is_voice_turn = False
         self.really_quit = False
+        self.tray_icon = None
+        self._was_minimized = False
+        self._surface_state_handler_id = 0
         self.pending_attachments: List[str] = []
+
+        self.connect("realize", self._on_window_realized)
 
         self.set_title("Pequeño Asistente")
         self.set_default_size(
@@ -309,6 +317,23 @@ class MainWindow(Adw.ApplicationWindow):
             on_turn_finished=lambda u, a: GLib.idle_add(self._on_call_turn_finished, u, a),
             on_call_ended=lambda: GLib.idle_add(self._on_call_engine_ended)
         )
+
+        # Wake-word detector (Vosk + acoustic neural embeddings)
+        self.wake_word_detector = WakeWordDetector(
+            on_detected=lambda: GLib.idle_add(self._on_wake_word_detected),
+            phrase=audio_cfg.get("wake_word_phrase", "okay asistente"),
+            commands=self._build_voice_commands_dict(),
+            on_freeform_audio=self._on_wake_freeform_audio,
+            on_freeform_text=lambda txt: GLib.idle_add(self._on_wake_freeform_transcribed, txt),
+            on_listening_ended=lambda: GLib.idle_add(self._on_wake_listening_ended),
+            verify_wake_audio=self._verify_wake_audio,
+            verify_on_partial=False,
+            should_pause=lambda: self.transcriber.is_recording or self.call_engine.is_active or self.tts.is_speaking,
+            min_word_confidence=0.35,
+            partial_streak_required=5,
+        )
+        if audio_cfg.get("wake_word_enabled", False):
+            self.wake_word_detector.start()
 
         # Heartbeat & Automation Manager
         self.heartbeat_manager = HeartbeatManager(
@@ -632,6 +657,22 @@ class MainWindow(Adw.ApplicationWindow):
         self.attachments_scroll.set_child(self.attachments_box)
         card_vbox.append(self.attachments_scroll)
 
+        # Voice command & wake-word feedback banner (hidden when idle)
+        self._voice_feedback_hide_id = 0
+        self.voice_feedback_banner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.voice_feedback_banner.add_css_class("voice-feedback-banner")
+        self.voice_feedback_banner.set_visible(False)
+
+        self.voice_feedback_icon = Gtk.Image.new_from_icon_name("audio-input-microphone-symbolic")
+        self.voice_feedback_icon.set_pixel_size(14)
+        self.voice_feedback_banner.append(self.voice_feedback_icon)
+
+        self.voice_feedback_label = Gtk.Label(label="", xalign=0)
+        self.voice_feedback_label.set_hexpand(True)
+        self.voice_feedback_label.set_ellipsize(Pango.EllipsizeMode.END)
+        self.voice_feedback_banner.append(self.voice_feedback_label)
+        card_vbox.append(self.voice_feedback_banner)
+
         # Horizontal input row
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
 
@@ -656,6 +697,7 @@ class MainWindow(Adw.ApplicationWindow):
         self.text_view = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD)
         self.text_view.set_hexpand(True)
         self.text_view.add_css_class("chat-text-view")
+        self.text_view.connect("paste-clipboard", self._on_text_view_paste_clipboard)
         self.text_buffer = self.text_view.get_buffer()
         self.text_buffer.connect("changed", self._on_input_buffer_changed)
         self.text_buffer.connect("notify::cursor-position", lambda *_: self._on_input_buffer_changed(self.text_buffer))
@@ -750,6 +792,136 @@ class MainWindow(Adw.ApplicationWindow):
         except Exception as e:
             logger.error(f"Error handling dropped files: {e}")
         return False
+
+    def _on_text_view_paste_clipboard(self, text_view: Gtk.TextView):
+        """Intercepts paste on the chat input to attach clipboard images or copied files."""
+        if self._try_paste_image_from_clipboard():
+            text_view.stop_emission_by_name("paste-clipboard")
+
+    def _try_paste_image_from_clipboard(self) -> bool:
+        """Checks the clipboard for an image or copied files and attaches them to the input bar.
+
+        Returns True if an image/file paste was initiated so callers can suppress plain-text paste.
+        """
+        try:
+            clipboard = self.text_view.get_clipboard()
+            formats = clipboard.get_formats()
+            mime_types = list(formats.get_mime_types() or [])
+            image_mimes = [m for m in mime_types if m.startswith("image/")]
+            has_texture = formats.contain_gtype(Gdk.Texture) or bool(image_mimes)
+            has_file_list = formats.contain_gtype(Gdk.FileList) or ("text/uri-list" in mime_types)
+
+            if has_texture:
+                clipboard.read_texture_async(
+                    None,
+                    self._on_clipboard_texture_ready,
+                    image_mimes,
+                )
+                return True
+
+            if has_file_list:
+                clipboard.read_value_async(
+                    Gdk.FileList,
+                    GLib.PRIORITY_DEFAULT,
+                    None,
+                    self._on_clipboard_filelist_ready,
+                    None,
+                )
+                return True
+        except Exception as e:
+            logger.error(f"Error inspecting clipboard for pasted image: {e}")
+        return False
+
+    def _get_pasted_images_dir(self) -> Path:
+        """Returns the persistent directory where clipboard-pasted images are saved."""
+        pasted_dir = Path.home() / ".config" / "pequeno-asistente" / "pasted_images"
+        pasted_dir.mkdir(parents=True, exist_ok=True)
+        return pasted_dir
+
+    def _save_pasted_texture(self, texture: Gdk.Texture) -> Optional[str]:
+        """Saves a Gdk.Texture as a PNG file and returns its path."""
+        try:
+            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            dest = self._get_pasted_images_dir() / f"pasted_{ts}_{uuid.uuid4().hex[:6]}.png"
+            if texture.save_to_png(str(dest)):
+                return str(dest)
+        except Exception as e:
+            logger.error(f"Error saving pasted texture to PNG: {e}")
+        return None
+
+    def _on_clipboard_texture_ready(self, clipboard: Gdk.Clipboard, result, image_mimes):
+        """Callback for clipboard.read_texture_async."""
+        texture = None
+        try:
+            texture = clipboard.read_texture_finish(result)
+        except Exception as e:
+            logger.debug(f"read_texture_finish failed: {e}")
+
+        if texture is not None:
+            path = self._save_pasted_texture(texture)
+            if path:
+                self.add_attachment(path)
+                return
+
+        if image_mimes:
+            try:
+                clipboard.read_async(
+                    image_mimes,
+                    GLib.PRIORITY_DEFAULT,
+                    None,
+                    self._on_clipboard_raw_image_ready,
+                    None,
+                )
+            except Exception as e:
+                logger.error(f"Error falling back to raw clipboard image read: {e}")
+
+    def _on_clipboard_raw_image_ready(self, clipboard: Gdk.Clipboard, result, _user_data):
+        """Fallback callback for reading raw image bytes from clipboard."""
+        try:
+            stream, mime_type = clipboard.read_finish(result)
+            if stream is None:
+                return
+            chunks: List[bytes] = []
+            while True:
+                gbytes = stream.read_bytes(65536, None)
+                data = gbytes.get_data() if gbytes is not None else b""
+                if not data:
+                    break
+                chunks.append(data)
+            stream.close(None)
+            raw = b"".join(chunks)
+            if not raw:
+                return
+
+            ext_map = {
+                "image/png": ".png",
+                "image/jpeg": ".jpg",
+                "image/jpg": ".jpg",
+                "image/webp": ".webp",
+                "image/gif": ".gif",
+                "image/bmp": ".bmp",
+                "image/tiff": ".tiff",
+                "image/svg+xml": ".svg",
+            }
+            ext = ext_map.get((mime_type or "").lower(), ".png")
+            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            dest = self._get_pasted_images_dir() / f"pasted_{ts}_{uuid.uuid4().hex[:6]}{ext}"
+            dest.write_bytes(raw)
+            self.add_attachment(str(dest))
+        except Exception as e:
+            logger.error(f"Error reading raw clipboard image: {e}")
+
+    def _on_clipboard_filelist_ready(self, clipboard: Gdk.Clipboard, result, _user_data):
+        """Callback for clipboard.read_value_async(Gdk.FileList)."""
+        try:
+            value = clipboard.read_value_finish(result)
+            if isinstance(value, Gdk.FileList):
+                for gfile in value.get_files():
+                    path = gfile.get_path()
+                    if path and os.path.isfile(path):
+                        self.add_attachment(path)
+        except Exception as e:
+            logger.debug(f"read_value_finish(Gdk.FileList) failed: {e}")
 
     def _on_attach_clicked(self, _btn):
         """Opens native file selector to attach audio, images or documents."""
@@ -1339,6 +1511,10 @@ class MainWindow(Adw.ApplicationWindow):
         elif ctrl and keyval in (Gdk.KEY_u, Gdk.KEY_U):
             self._on_attach_clicked(None)
             return True
+        elif ctrl and not (state & Gdk.ModifierType.SHIFT_MASK) and keyval in (Gdk.KEY_v, Gdk.KEY_V):
+            if self.input_bar.get_visible() and not self.text_view.has_focus():
+                if self._try_paste_image_from_clipboard():
+                    return True
         elif (alt and keyval == Gdk.KEY_Left) or (ctrl and keyval == Gdk.KEY_Page_Up):
             self._navigate_session(delta=-1)
             return True
@@ -2131,8 +2307,10 @@ class MainWindow(Adw.ApplicationWindow):
         def on_audio_changed():
             # Update transcriber settings
             audio_cfg = self.config_manager.get_audio_config()
-            self.transcriber.model_size = audio_cfg.get("whisper_model", "tiny")
-            self.transcriber.language = audio_cfg.get("language")
+            self.transcriber.model_size = audio_cfg.get("whisper_model", "small")
+            self.transcriber.device = audio_cfg.get("device", "cuda")
+            self.transcriber.compute_type = audio_cfg.get("compute_type", "float16")
+            self.transcriber.language = audio_cfg.get("language", "es")
 
             # Update Unified TTS settings (Kokoro & ElevenLabs)
             kokoro_cfg = self.config_manager.get_kokoro_config()
@@ -2160,6 +2338,16 @@ class MainWindow(Adw.ApplicationWindow):
             # System TTS (spd-say)
             if hasattr(self.tts, "system_tts"):
                 self.tts.system_tts.lang = kokoro_cfg.get("lang", "es")
+
+            # Wake-word detector
+            if hasattr(self, "wake_word_detector"):
+                self.wake_word_detector.update_commands(self._build_voice_commands_dict())
+                self.wake_word_detector.reload_acoustic_templates()
+                self.wake_word_detector.update_phrase(audio_cfg.get("wake_word_phrase", "okay asistente"))
+                if audio_cfg.get("wake_word_enabled", False):
+                    self.wake_word_detector.start()
+                else:
+                    self.wake_word_detector.stop()
 
         win = SettingsWindow(
             self.config_manager,
@@ -2255,6 +2443,8 @@ class MainWindow(Adw.ApplicationWindow):
     def quit_app(self):
         """Cierra completamente la aplicación y desconecta todos los servidores MCP."""
         self.really_quit = True
+        if hasattr(self, "wake_word_detector") and self.wake_word_detector:
+            self.wake_word_detector.stop()
         if hasattr(self, "heartbeat_manager") and self.heartbeat_manager:
             self.heartbeat_manager.stop()
         app = self.get_application()
@@ -2263,11 +2453,280 @@ class MainWindow(Adw.ApplicationWindow):
         else:
             self.close()
 
+    def _build_voice_commands_dict(self):
+        """Builds the map of built-in and user-configured instant/custom voice commands."""
+        cmds = {
+            "nuevo chat": lambda: GLib.idle_add(self._on_voice_new_chat),
+            "abre nuevo chat": lambda: GLib.idle_add(self._on_voice_new_chat),
+            "abrir nuevo chat": lambda: GLib.idle_add(self._on_voice_new_chat),
+            "nueva conversación": lambda: GLib.idle_add(self._on_voice_new_chat),
+            "nueva conversacion": lambda: GLib.idle_add(self._on_voice_new_chat),
+            "abrir nueva conversación": lambda: GLib.idle_add(self._on_voice_new_chat),
+            "abrir nueva conversacion": lambda: GLib.idle_add(self._on_voice_new_chat),
+            "abre nueva conversación": lambda: GLib.idle_add(self._on_voice_new_chat),
+            "abre nueva conversacion": lambda: GLib.idle_add(self._on_voice_new_chat),
+            "abrir configuración": lambda: GLib.idle_add(self._on_voice_open_settings),
+            "abrir configuracion": lambda: GLib.idle_add(self._on_voice_open_settings),
+            "abre configuración": lambda: GLib.idle_add(self._on_voice_open_settings),
+            "abre configuracion": lambda: GLib.idle_add(self._on_voice_open_settings),
+            "ocultar ventana": lambda: GLib.idle_add(self._on_voice_hide_window),
+            "oculta ventana": lambda: GLib.idle_add(self._on_voice_hide_window),
+            "ocultar la ventana": lambda: GLib.idle_add(self._on_voice_hide_window),
+            "oculta la ventana": lambda: GLib.idle_add(self._on_voice_hide_window),
+            "cultar ventana": lambda: GLib.idle_add(self._on_voice_hide_window),
+            "abre archivos": lambda: GLib.idle_add(self._on_voice_open_files),
+            "abrir archivos": lambda: GLib.idle_add(self._on_voice_open_files),
+        }
+        audio_cfg = self.config_manager.get_audio_config()
+        for entry in audio_cfg.get("custom_voice_commands", []):
+            name = (entry.get("name") or "").lower().strip()
+            action_type = entry.get("action_type", "shell")
+            action_value = (entry.get("action_value") or "").strip()
+            if not name or not action_value:
+                continue
+            if action_type == "prompt":
+                cmds[name] = (lambda msg=action_value: GLib.idle_add(self._on_wake_freeform_transcribed, msg))
+            else:
+                cmds[name] = (lambda cmd_str=action_value: self._run_custom_voice_shell(cmd_str))
+
+        wrapped_cmds = {}
+        for cmd_name, cmd_fn in cmds.items():
+            def _make_wrapped(label=cmd_name, fn=cmd_fn):
+                def _runner():
+                    GLib.idle_add(self._on_voice_command_confirmed, label)
+                    return fn()
+                return _runner
+            wrapped_cmds[cmd_name] = _make_wrapped()
+        return wrapped_cmds
+
+    def _play_voice_cue(self, kind: str):
+        """Plays a brief, non-blocking audio chime to confirm listening or command receipt."""
+        def _worker():
+            import math
+            import wave
+            import array
+            import shutil
+            import subprocess
+            import tempfile
+
+            player = shutil.which("pw-play") or shutil.which("aplay")
+            if not player:
+                return
+
+            sample_rate = 22050
+            tones = (
+                [(587.33, 0.07), (880.0, 0.09)]
+                if kind == "listening"
+                else [(880.0, 0.06), (1174.66, 0.08)]
+            )
+            samples = array.array("h")
+            for freq, dur in tones:
+                total = int(sample_rate * dur)
+                fade = max(1, int(sample_rate * 0.015))
+                for i in range(total):
+                    env = 1.0
+                    if i < fade:
+                        env = i / fade
+                    elif i > total - fade:
+                        env = (total - i) / fade
+                    val = int(0.22 * 32767 * env * math.sin(2.0 * math.pi * freq * (i / sample_rate)))
+                    samples.append(val)
+
+            tmp = tempfile.NamedTemporaryFile(suffix=".wav", prefix=f"voice_cue_{kind}_", delete=False)
+            tmp_path = tmp.name
+            tmp.close()
+            try:
+                with wave.open(tmp_path, "wb") as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(sample_rate)
+                    wf.writeframes(samples.tobytes())
+                subprocess.run([player, tmp_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2.0)
+            except Exception:
+                pass
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _set_voice_feedback(self, state: Optional[str], message: str = "", auto_hide_ms: int = 0):
+        """Updates the visual voice-listening/command indicator banner."""
+        if not hasattr(self, "voice_feedback_banner"):
+            return False
+
+        if getattr(self, "_voice_feedback_hide_id", 0):
+            GLib.source_remove(self._voice_feedback_hide_id)
+            self._voice_feedback_hide_id = 0
+
+        for cls in ("voice-feedback-listening", "voice-feedback-processing", "voice-feedback-confirmed"):
+            self.voice_feedback_banner.remove_css_class(cls)
+
+        if state is None:
+            self.voice_feedback_banner.set_visible(False)
+            if not self.transcriber.is_recording:
+                self.mic_btn.remove_css_class("mic-button-recording")
+            if not self.transcriber.is_transcribing:
+                self.mic_btn.remove_css_class("mic-button-transcribing")
+            return False
+
+        if state == "listening":
+            self.voice_feedback_banner.add_css_class("voice-feedback-listening")
+            self.voice_feedback_icon.set_from_icon_name("audio-input-microphone-symbolic")
+            self.mic_btn.add_css_class("mic-button-recording")
+            self.mic_btn.remove_css_class("mic-button-transcribing")
+        elif state == "processing":
+            self.voice_feedback_banner.add_css_class("voice-feedback-processing")
+            self.voice_feedback_icon.set_from_icon_name("system-run-symbolic")
+            self.mic_btn.remove_css_class("mic-button-recording")
+            self.mic_btn.add_css_class("mic-button-transcribing")
+        elif state == "confirmed":
+            self.voice_feedback_banner.add_css_class("voice-feedback-confirmed")
+            self.voice_feedback_icon.set_from_icon_name("object-select-symbolic")
+            self.mic_btn.remove_css_class("mic-button-recording")
+            self.mic_btn.remove_css_class("mic-button-transcribing")
+
+        self.voice_feedback_label.set_text(message)
+        self.voice_feedback_banner.set_visible(True)
+
+        if auto_hide_ms > 0:
+            self._voice_feedback_hide_id = GLib.timeout_add(
+                auto_hide_ms, lambda: self._set_voice_feedback(None)
+            )
+        return False
+
+    def _on_voice_command_confirmed(self, command_label: str):
+        """Shows confirmation indicator and plays confirmation tone when a command is matched."""
+        self._set_voice_feedback("confirmed", f"Comando recibido: {command_label}", auto_hide_ms=2400)
+        self._play_voice_cue("confirmed")
+        return False
+
+    def _on_wake_listening_ended(self):
+        """Hides the listening indicator if post-wake capture timed out without speech."""
+        if hasattr(self, "voice_feedback_banner") and self.voice_feedback_banner.has_css_class("voice-feedback-listening"):
+            self._set_voice_feedback(None)
+        return False
+
+    def _run_custom_voice_shell(self, cmd_str: str):
+        """Executes a user-configured shell/app voice command directly without transcription."""
+        import subprocess
+        try:
+            subprocess.Popen(cmd_str, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            logger.error(f"Error executing custom voice command '{cmd_str}': {e}")
+
+    def _on_wake_word_detected(self):
+        """Shows and focuses the assistant window with listening feedback when the wake word is heard."""
+        self.set_visible(True)
+        self.present()
+        self.text_view.grab_focus()
+        self._set_voice_feedback("listening", "Escuchando tu orden...")
+        self._play_voice_cue("listening")
+        return False
+
+    def _on_voice_new_chat(self):
+        """Opens a new chat thread and focuses the window on voice command."""
+        self.set_visible(True)
+        self.present()
+        self._on_new_thread()
+        self.text_view.grab_focus()
+        return False
+
+    def _on_voice_open_settings(self):
+        """Opens the settings window on voice command."""
+        self.set_visible(True)
+        self.present()
+        self._on_open_settings(None)
+        return False
+
+    def _on_voice_hide_window(self):
+        """Hides the assistant window on voice command without quitting."""
+        self.set_visible(False)
+        return False
+
+    def _on_voice_open_files(self):
+        """Opens the user's home directory in the system file manager."""
+        import subprocess
+        subprocess.Popen(["xdg-open", str(Path.home())], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return False
+
+    def _verify_wake_audio(self, wav_path: str):
+        """Uses faster-whisper to verify a Vosk wake candidate and returns (matched, transcript)."""
+        try:
+            text = self.transcriber.transcribe_file(wav_path)
+            norm = normalize_command_text(text)
+            matched = self.wake_word_detector._match_text(norm)
+            if not matched:
+                logger.info(f"Wake candidate rejected by Whisper: '{text}'")
+            return (matched, text)
+        except Exception as e:
+            logger.warning(f"Wake verification error: {e}")
+            return (False, "")
+
+    def _on_wake_freeform_audio(self, wav_path: str):
+        """Transcribes free-form post-wake audio with faster-whisper and routes commands or chat."""
+        GLib.idle_add(self._set_voice_feedback, "processing", "Procesando orden de voz...")
+        try:
+            raw_text = self.transcriber.transcribe_file(wav_path)
+            cleaned = strip_wake_prefix(raw_text, self.wake_word_detector.phrases)
+            norm_cleaned = normalize_command_text(cleaned)
+            # Ignore stray residual wake-word fragments (e.g. tail of 'OK Asistente' -> 'distante'/'asistente')
+            if len(cleaned) < 2 or norm_cleaned in {"asistente", "distante", "existente", "ok", "okay", "okey"}:
+                logger.info(f"Ignored residual wake fragment in free-form audio: '{raw_text}'")
+                GLib.idle_add(self._set_voice_feedback, None)
+                return
+            matched_cmd = self.wake_word_detector._match_command(cleaned)
+            if matched_cmd:
+                logger.info(f"Free-form voice matched command: {matched_cmd}")
+                self.wake_word_detector.commands[matched_cmd]()
+                return
+            GLib.idle_add(self._on_wake_freeform_transcribed, cleaned)
+        except Exception as e:
+            logger.error(f"Error transcribing free-form voice order: {e}")
+            GLib.idle_add(self._set_voice_feedback, None)
+
+    def _on_wake_freeform_transcribed(self, text: str):
+        """Submits a transcribed free-form voice order to the assistant chat."""
+        self.set_visible(True)
+        self.present()
+        self._set_voice_feedback("confirmed", f"Orden recibida: {text}", auto_hide_ms=2200)
+        self._play_voice_cue("confirmed")
+        self._is_voice_turn = True
+        self.text_buffer.set_text(text)
+        end_iter = self.text_buffer.get_end_iter()
+        self.text_buffer.place_cursor(end_iter)
+        self.text_view.grab_focus()
+        self._on_send_clicked(None)
+        return False
+
+    def _on_window_realized(self, _widget):
+        """Monitors window surface state so minimizing hides to the native tray icon."""
+        surface = self.get_surface()
+        if surface is not None and not self._surface_state_handler_id:
+            self._surface_state_handler_id = surface.connect("notify::state", self._on_surface_state_changed)
+
+    def _on_surface_state_changed(self, surface, _pspec):
+        """Hides the window to tray when minimized by the user or window manager."""
+        try:
+            is_minimized = bool(surface.get_state() & Gdk.ToplevelState.MINIMIZED)
+        except Exception:
+            return
+        if is_minimized and not self._was_minimized:
+            self._was_minimized = True
+            if self.tray_icon and getattr(self.tray_icon, "is_registered", False) and self.get_visible():
+                self.set_visible(False)
+        elif not is_minimized:
+            self._was_minimized = False
+
     def toggle_window(self):
         """Toggle hide/show window."""
         if self.get_visible():
             self.set_visible(False)
         else:
+            self._was_minimized = False
+            self.unminimize()
             self.set_visible(True)
             self.present()
             self.text_view.grab_focus()

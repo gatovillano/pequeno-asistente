@@ -943,8 +943,10 @@ async def transcribe_audio(file: UploadFile = File(...)):
         cfg, _, _, _, _ = get_agent_stack()
         audio_cfg = cfg.get_audio_config() if hasattr(cfg, "get_audio_config") else {}
         transcriber = AudioTranscriber(
-            model_size=audio_cfg.get("whisper_model", "tiny"),
-            language=audio_cfg.get("language")
+            model_size=audio_cfg.get("whisper_model", "small"),
+            device=audio_cfg.get("device", "cuda"),
+            compute_type=audio_cfg.get("compute_type", "float16"),
+            language=audio_cfg.get("language", "es")
         )
         text = transcriber.transcribe_file(tmp_path)
         return {"text": text}

@@ -82,13 +82,29 @@ Un asistente de escritorio ágil, moderno y minimalista diseñado para Linux (Hy
    - **Interrupción Instantánea (*Barge-in*)**: Si el asistente está hablando y comienzas a hablar, la reproducción se detiene automáticamente para escucharte.
    - **Persistencia en el Chat**: Toda la conversación mantenida durante la llamada se guarda automáticamente en el hilo de chat actual al colgar.
 
-10. **Terminal Interactiva PTY Integrada (Estilo KogniTerm)**:
+10. **Activación por Palabra Clave y Gestión por Comandos de Voz (Hands-Free)**:
+   - **Escucha Continua por Palabra Clave (*Wake Word*)**: Activa el asistente con la voz diciendo la frase configurada (por defecto `"okay asistente"` / `"ok asistente"`, personalizable en **Configuración ➔ Voz y Audio**). Se pausa automáticamente durante dictados, llamadas activas o locución TTS.
+   - **Doble Motor Local (Acústico Neuronal + Vosk/Whisper)**:
+     - **Entrenamiento Acústico Directo (`acoustic_wake.py`)**: Utiliza embeddings neuronales de `openwakeword` (ONNX) + Silero VAD y similitud DTW coseno para reconocer tu voz sin necesidad de transcripción. Desde **Configuración ➔ Voz y Audio** puedes grabar muestras de 2.5s para la palabra clave y comandos instantáneos.
+     - **Reconocimiento Offline Vosk + Verificación (`wake_word.py`)**: Usa `vosk-model-small-es-0.42` en local (descarga automática al primer uso) con gramática restringida, confianza por palabra y verificación opcional con `faster-whisper`.
+   - **Comandos de Voz Integrados (Ejecución Instantánea)**:
+     - **Nuevo chat**: `"nuevo chat"`, `"abre nuevo chat"`, `"nueva conversación"`.
+     - **Configuración**: `"abrir configuración"`, `"abre configuración"`.
+     - **Ocultar ventana**: `"ocultar ventana"`, `"oculta la ventana"`.
+     - **Abrir archivos**: `"abre archivos"`, `"abrir archivos"` (abre tu carpeta personal en el gestor de archivos).
+   - **Comandos de Voz Personalizados**: En **Configuración ➔ Voz y Audio ➔ Comandos de voz personalizados**, crea tus propios comandos grabando muestras de 2.5s y elige entre:
+     - **Ejecutar comando / app (`shell`)**: Lanza aplicaciones o scripts del sistema directamente.
+     - **Enviar mensaje al agente (`prompt`)**: Dispara un prompt predefinido hacia el asistente.
+   - **Órdenes Libres (*Free-Form*)**: Si tras decir la palabra de activación (o en la misma frase, ej. *"ok asistente, resume mis pendientes"*) das una instrucción abierta, el audio se captura automáticamente hasta que terminas de hablar, se transcribe con `faster-whisper` y se envía al chat.
+   - **Feedback Visual y Sonoro**: Emite tonos breves de escucha/confirmación (`pw-play`/`aplay`) y muestra un banner de estado en la ventana (*Escuchando tu orden...*, *Procesando orden de voz...*, *Comando recibido*).
+
+11. **Terminal Interactiva PTY Integrada (Estilo KogniTerm)**:
    - **Soporte Completo para `sudo`**: Permite ejecutar comandos de superusuario que requieren ingresar contraseña de forma segura e interactiva a través de un pseudo-terminal (PTY) real en Linux.
    - **Acceso Rápido con `Ctrl+T`**: Conmuta instantáneamente entre el Chat y la Terminal Interactiva con un solo clic en la cabecera o mediante atajo de teclado.
    - **Experiencia de Consola Nativa**: Compatible con autocompletado con `Tab`, historial con flechas `↑`/`↓`, atajos POSIX (`Ctrl+C`, `Ctrl+D`, `Ctrl+L`, `Ctrl+Z`), selección de texto y renderizado de colores ANSI con `pyte`.
    - **Barra de Acciones y Comandos Rápidos**: Botones para pegar desde el portapapeles, limpiar pantalla, interrumpir procesos y chips de ejecución inmediata (`sudo`, `sudo apt update`, `htop`, `systemctl`, etc.).
 
-11. **Gestión Segura de Contraseñas y Diálogo Gráfico para `sudo`**:
+12. **Gestión Segura de Contraseñas y Diálogo Gráfico para `sudo`**:
    - **Diálogo Modal Nativo GTK4 / Libadwaita**: Cuando el agente o una herramienta necesita pedir una contraseña (para configurar servicios, bases de datos o para permisos elevados), se despliega una ventana modal segura con campo `Gtk.PasswordEntry`, botón para ver/ocultar y advertencia de mayúsculas activadas.
    - **Sin Texto Plano en el Chat**: Las contraseñas nunca viajan en claro por el historial ni se envían en prompts al LLM; se encapsulan en un objeto seguro `SecureCredential` que enmascara los secretos en logs (`••••••••`) y memoria.
    - **Helper `SUDO_ASKPASS` Integrado**: Script ejecutable (`scripts/pequeno-asistente-askpass`) conectado a las sesiones de consola, servidores MCP bash y terminal PTY; al ejecutar comandos con `sudo` o `sudo -A`, se abre automáticamente el diálogo gráfico de autenticación.
@@ -97,11 +113,7 @@ Un asistente de escritorio ágil, moderno y minimalista diseñado para Linux (Hy
      - `security__execute_sudo`: Ejecuta comandos administrativos abriendo el diálogo seguro de sudo si es necesario.
      - `security__apply_credential`: Aplica una credencial guardada a un archivo de configuración con permisos restringidos (`0600`).
 
-12. **Ecosistema Completo de Habilidades (Skills) y Compatibilidad con Claude Code**:
-13. **Acceso Remoto con FastAPI, Cloudflare Tunnel y App Android**:
-    - **Servidor Backend FastAPI (`pequeno_asistente/server.py`)**: Expone endpoints REST y streaming en tiempo real vía Server-Sent Events (SSE) con soporte para autenticación Bearer API Key.
-    - **Túnel Seguro Cloudflare**: Script automatizado (`./scripts/start_remote.sh`) que levanta el servidor y crea un túnel público inmediato (`https://xxx.trycloudflare.com`) sin requerir abrir puertos en tu router.
-    - **App Móvil Android (`mobile/`)**: Aplicación desarrollada en React Native / Expo con tema oscuro, navegación por hilos persistentes, visualización en vivo de herramientas MCP y razonamiento, dictado por voz y compatibilidad directa con Expo Go y compilación a APK nativo.
+13. **Ecosistema Completo de Habilidades (Skills) y Compatibilidad con Claude Code**:
    - **Reconocimiento Automático Multi-Origen**:
      - **Claude Code**: Escanea e integra al instante las habilidades de `~/.claude/skills` y `.claude/skills` (carpetas con `SKILL.md`, enlaces simbólicos y archivos markdown).
      - **Estándar Global de Agentes (`skills.sh`)**: Reconoce habilidades en `~/.agents/skills` y `.agents/skills`.
@@ -122,6 +134,11 @@ Un asistente de escritorio ágil, moderno y minimalista diseñado para Linux (Hy
      - `skills__get`: Consulta el contenido completo de una habilidad procedimental.
      - `skills__install`: Instala habilidades desde enlaces de GitHub, URLs o especificaciones de texto.
      - `skills__uninstall` y `skills__toggle`: Desinstala o pausa habilidades.
+
+14. **Acceso Remoto con FastAPI, Cloudflare Tunnel y App Android**:
+    - **Servidor Backend FastAPI (`pequeno_asistente/server.py`)**: Expone endpoints REST y streaming en tiempo real vía Server-Sent Events (SSE) con soporte para autenticación Bearer API Key.
+    - **Túnel Seguro Cloudflare**: Script automatizado (`./scripts/start_remote.sh`) que levanta el servidor y crea un túnel público inmediato (`https://xxx.trycloudflare.com`) sin requerir abrir puertos en tu router.
+    - **App Móvil Android (`mobile/`)**: Aplicación desarrollada en React Native / Expo con tema oscuro, navegación por hilos persistentes, visualización en vivo de herramientas MCP y razonamiento, dictado por voz y compatibilidad directa con Expo Go y compilación a APK nativo.
 
 ---
 
@@ -188,16 +205,23 @@ Pequeño asistente/
 │   │   ├── core.py          # Bucle del agente (LiteLLM + herramientas MCP dinámicas)
 │   │   ├── memory.py        # Gestor de memoria en capas (USER.md, MEMORY.md, daily)
 │   │   └── providers.py     # Catálogo de proveedores LLM (estilo KogniTerm)
+│   ├── audio/
+│   │   ├── acoustic_wake.py # Reconocimiento acústico neuronal (openwakeword + DTW)
+│   │   ├── call_engine.py   # Motor de llamada manos libres con VAD y barge-in
+│   │   ├── transcriber.py   # Dictado y transcripción local con faster-whisper
+│   │   ├── tts.py           # Síntesis de voz híbrida (ElevenLabs + Kokoro TTS)
+│   │   └── wake_word.py     # Detector de palabra clave y comandos de voz (Vosk/acústico)
 │   ├── mcp_client/
 │   │   ├── catalog.py       # Catálogo extenso de servidores MCP
 │   │   └── manager.py       # Gestor multisesión de MCPs (stdio / sse)
 │   ├── ui/
 │   │   ├── chat_view.py     # Componente visual del chat con burbujas y tarjetas MCP
-│   │   ├── settings_window.py # Ventana de preferencias (Modelos, Catálogo MCP, Memoria)
+│   │   ├── settings_window.py # Ventana de preferencias (Modelos, MCP, Voz, Memoria)
 │   │   ├── tray.py          # Servidor de Socket IPC para toggling instantáneo
 │   │   └── window.py        # Ventana principal tipo dropdown
 │   ├── config.py            # Persistencia de configuración en ~/.config/pequeno-asistente
-│   └── main.py              # Punto de entrada de la aplicación
+│   ├── main.py              # Punto de entrada de la aplicación
+│   └── server.py            # Servidor REST + SSE con FastAPI para acceso remoto
 ├── scripts/
 │   ├── toggle.sh            # Script para alternar ventana
 │   ├── start_remote.sh      # Inicia servidor FastAPI + Túnel público Cloudflare
@@ -214,6 +238,7 @@ Pequeño asistente/
 
 ## 💡 Uso Rápido
 - **Abrir / Cerrar**: Presiona `Super + A` o haz clic en el icono 🤖 de Waybar.
+- **Control por Voz**: Habilita *"Activar con palabra clave"* en **Configuración ➔ Voz y Audio** y di `"okay asistente"` (o tus comandos grabados como `"nuevo chat"`, `"ocultar ventana"`, `"abre archivos"`).
 - **Configuración**: Haz clic en el botón de engranaje ⚙️ en la cabecera.
 - **Limpiar Chat**: Haz clic en el botón 🧹.
 - **Enviar Mensaje**: Escribe y pulsa `Enter` (usa `Shift + Enter` para salto de línea).
